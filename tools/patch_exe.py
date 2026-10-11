@@ -17,6 +17,8 @@ CAVE_PAUSE_OPTIONS = 0x4015D0   # ee.c: PauseScreenASM
 CAVE_TEX_CLEAR = 0x401970       # ee.c: TexBufferASM
 CAVE_TITLE_LANG = 0x401D60      # ee.c: MainMenuTitleASM
 CAVE_MAP = 0x401240             # eight bytes apart: ee.c map hooks (EE PatchMapImages)
+CAVE_SFX = 0x401268             # eight bytes apart: ee.c load / save / pause confirm sounds (EE PatchCustomSFXs)
+PLAY_SOUND = 0x515580           # the game's play-sound-effect function
 # EE TexPatch buffers, in guest memory between the image and the heap (0x2500000-0x10000000):
 # 2x and 4x the largest texture file (22,380,640 bytes, sh2e/pic/map), as EE sizes them.
 TEX_BUF1, TEX_BUF2, TEX_BUF3 = 0x04000000, 0x06B00000, 0x09600000
@@ -125,6 +127,13 @@ PATCHES = [
     (0x49D79A, bytes.fromhex('a128d99400'), call(0x49D79A, CAVE_MAP + 16), 'player icon x hook'),
     (0x49F30C, bytes.fromhex('d844240cd8442418'), call(0x49F30C, CAVE_MAP + 24) + b'\x90' * 3, 'map width hook'),
     (0x49F2EF, bytes.fromhex('a18434a300'), call(0x49F2EF, CAVE_MAP + 32), 'map x hook'),
+
+    # -- PreserveSoundsOnLoad (EE PatchCustomSFXs): the load and save sounds come from sh2e/sound/extra and
+    # play on the host, so loading or saving does not cut them off (ee.c sfx_call; off: the game's sound).
+    *((CAVE_SFX + 8 * i, b'\xCC' * 4, b'\xC3\xCC\xCC\xCC', 'cave: sound') for i in range(3)),
+    *((va, call(va, PLAY_SOUND), call(va, CAVE_SFX), 'load sound') for va in (0x454A64, 0x49870C, 0x497F84)),
+    (0x4476DB, call(0x4476DB, PLAY_SOUND), call(0x4476DB, CAVE_SFX + 8), 'save sound (save point)'),
+    (0x40282E, call(0x40282E, PLAY_SOUND), call(0x40282E, CAVE_SFX + 16), 'pause menu confirm sound'),
 
     # -- SfxPatch (EnableSFXAddrHack): the sound bank buffer passed to the DirectSound setup.
     (0x515164, p32(0xBDDD40), p32(SFX_BUF), 'sound bank buffer'),

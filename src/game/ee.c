@@ -241,6 +241,7 @@ static void ws_setf(uint32_t va, float v) { memcpy(GPTR(va), &v, 4); }
 static float ws_getf(uint32_t va) { float v; memcpy(&v, GPTR(va), 4); return v; }
 static float ws_text(void) { return ws_getf(WS_VAR(V_TEXT)); }
 
+static int sfx_flashlight = 1, sfx_save_load = 1;  /* sh2e.ini FlashlightToggleSFX / PreserveSoundsOnLoad */
 static void ee_widescreen_init(void) {
     uint32_t w = 1280, h = 720;
     FILE *f = fopen("sh2e.ini", "r");
@@ -288,6 +289,8 @@ static void ee_widescreen_init(void) {
         unsigned n;
         char val[32];
         if (sscanf(line, " cores = %u", &n) == 1) cores = n;
+        if (sscanf(line, " FlashlightToggleSFX = %u", &n) == 1) sfx_flashlight = n;
+        if (sscanf(line, " PreserveSoundsOnLoad = %u", &n) == 1) sfx_save_load = n;
         if (sscanf(line, " trace = %u", &n) == 1) rt_trace = n;  /* debugging: log every bridged call */
         if (sscanf(line, " ws%u = %31s", &n, val) == 2 && n < 160) {
             if (strchr(val, '.')) ws_setf(WS_VAR(n), (float)atof(val));
@@ -403,12 +406,77 @@ void sub_00401260(void) {  /* mov eax, [height]; a map page's screen x (edx) mov
     g_esp += 4;
 }
 
+/* ---- Extra sounds (EE PlayWavSound.cpp): the WAVs in sh2e/sound/extra, played on the host so loading
+ * or saving does not cut them off. ---- */
+#define SFX_VOLUME      0x00A3347Cu  /* 0..15 */
+#define PAUSE_MENU_ITEM 0x009326B4u  /* 1: Save Game */
+#define FLASHLIGHT_ON   0x01F7A806u
+#define CUTSCENE_ID     0x01F7A7C4u
+#define WORLD_COLOR     0x00942C50u  /* R, G, B */
+#define INVENTORY_ITEM  0x01F7A7E2u
+void ds_play_wav(const char *path, int slot, float gain);  /* dsound.c */
+static char wav_save[512], wav_load[512], wav_light_on[512], wav_light_off[512];
+
+static int extra_wav(const char *name, char *out) {
+    char rel[64];
+    struct stat st;
+    snprintf(rel, sizeof rel, "sh2e/sound/extra/%s", name);
+    rt_path(rel, out, 512);
+    return stat(out, &st) == 0;
+}
+static float sfx_gain(void) {  /* EE useSfxVolume: the game's sound effect volume */
+    static const int db[16] = {-10000, -2401, -1799, -1411, -1170, -961, -809, -665, -555, -445, -359, -270, -198, -124, -63, 0};
+    uint8_t v = MEM8(SFX_VOLUME);
+    return v < 16 ? powf(10.0f, db[v] / 2000.0f) : 1.0f;
+}
+static void ee_extra_sounds_init(void) {
+    sfx_save_load = sfx_save_load && extra_wav("save_sound.wav", wav_save) && extra_wav("g_start.wav", wav_load);
+    sfx_flashlight = sfx_flashlight && extra_wav("flashlight_on.wav", wav_light_on) && extra_wav("flashlight_off.wav", wav_light_off);
+    rt_log("ee: extra sounds: save/load %s, flashlight %s", sfx_save_load ? "on" : "off", sfx_flashlight ? "on" : "off");
+}
+/* Caves 0x401268 / 0x401270 / 0x401278 replace `call 0x515580` (play sound effect; cdecl, the caller pops
+ * the id, volume and flags): the load sound (title Continue, New Game, pause menu Load), the save sound at
+ * a save point, and the pause menu's confirm sound, which is the save sound on Save Game. */
+static void sfx_call(const char *wav, int slot) {
+    if (!sfx_save_load) { rt_resolve(0x00515580u)(); return; }  /* same stack and return address */
+    ds_play_wav(wav, slot, sfx_gain());
+    g_eax = 0x10;  /* PlaySound succeeded */
+    g_esp += 4;
+}
+void sub_00401268(void) { sfx_call(wav_load, 1); }
+void sub_00401270(void) { sfx_call(wav_save, 0); }
+void sub_00401278(void) {
+    if (MEM8(PAUSE_MENU_ITEM) == 1) sfx_call(wav_save, 0);
+    else rt_resolve(0x00515580u)();
+}
+
+/* EE RunPlayFlashlightSounds: a click when James switches the flashlight, where the game itself is silent. */
+static void ee_flashlight_sound(void) {
+    static uint32_t last_room;
+    static uint8_t last_on;
+    static int boss;
+    uint32_t room = MEM32(EE_ROOM_ID);
+    uint8_t on = MEM8(FLASHLIGHT_ON);
+    int never = room == 0x24 || room == 0x89 || room == 0x8F || room == 0x90;
+    int always = room == 0x65 || (room >= 0xAA && room <= 0xBB);  /* bug room, Otherworld hotel, final boss */
+    if (room == 0xBB && MEM32(CUTSCENE_ID) != 0) boss = 1;
+    else if (boss && room != 0xBB) boss = 0;
+    if (sfx_flashlight && on != last_on && room == last_room && !never && !boss &&
+        (always || (MEM8(0x01F7DC2Cu) == 1 && MEM8(0x01F7AE80u) == 0 && room != 0xA2) ||
+         ((room == 0x04 || room == 0x08) && !MEM8(WORLD_COLOR) && !MEM8(WORLD_COLOR + 1) && !MEM8(WORLD_COLOR + 2)) ||
+         (room == 0xA2 && MEM8(INVENTORY_ITEM) < 0x80)))
+        ds_play_wav(on ? wav_light_on : wav_light_off, 2, sfx_gain());
+    last_room = room;
+    last_on = on;
+}
+
 /* Called once after sh2pc.exe is loaded. */
 void ee_init(void) {
     host_arena_commit(TEX_BUF1, TEX_BUF3 + 2 * TEX_SIZE - TEX_BUF1);
     host_arena_commit(TITLE_PATHS, 0x10000);
     ee_sfx_init();
     ee_widescreen_init();
+    ee_extra_sounds_init();
     ee_map_scaling(1024, 1024);
     float one = 1.0f;
     memcpy(GPTR(0x0EC01000u), &one, 4);  /* texture scale X/Y (FullscreenImages) */
@@ -586,6 +654,9 @@ recomp_func_t ee_lookup_manual(uint32_t va) {
     case 0x00401250u: return sub_00401250;
     case 0x00401258u: return sub_00401258;
     case 0x00401260u: return sub_00401260;
+    case 0x00401268u: return sub_00401268;
+    case 0x00401270u: return sub_00401270;
+    case 0x00401278u: return sub_00401278;
     }
     return NULL;
 }
@@ -602,6 +673,8 @@ void ee_frame(void) {
     } else if (!block && blocked)
         MEM8(EE_RUMBLE_FLAG) = 1;
     blocked = block;
+
+    ee_flashlight_sound();
 
     /* SaveBGImage (EE RunSaveBGImage): back at the main menu, the chapter is the main scenario. */
     static uint8_t last_menu;

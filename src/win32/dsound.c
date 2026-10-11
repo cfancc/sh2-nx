@@ -77,6 +77,45 @@ void ds_track_write(const float *lr, int frames) {
 void ds_track_clear(void) { if (mx) { SDL_LockMutex(mx); track_rd = track_wr; SDL_UnlockMutex(mx); } }
 void ds_track_pause(int on) { track_paused = on; }
 
+/* One-shot sounds from files (the Enhanced Edition's extra WAVs, ee.c), mixed over the buffers. Host side, so
+ * they keep playing when the game stops its buffers to load or save. A slot plays one sound at a time. */
+static struct { char path[256]; float *pcm; uint32_t frames, pos; float gain; } extra[4];
+
+void ds_play_wav(const char *path, int slot, float gain) {
+    if (!mx || slot < 0 || slot >= 4) return;
+    float *pcm = NULL;
+    uint32_t frames = 0;
+    int cached = !strcmp(extra[slot].path, path);
+    if (!cached) {
+        SDL_AudioSpec spec;
+        Uint8 *raw;
+        Uint32 len;
+        SDL_AudioCVT cvt;
+        if (!SDL_LoadWAV(path, &spec, &raw, &len)) { rt_log("dsound: %s: %s", path, SDL_GetError()); return; }
+        if (SDL_BuildAudioCVT(&cvt, spec.format, spec.channels, spec.freq, AUDIO_F32SYS, 2, OUT_RATE) < 0) {
+            SDL_FreeWAV(raw);
+            return;
+        }
+        cvt.len = (int)len;
+        cvt.buf = malloc((size_t)len * cvt.len_mult);
+        memcpy(cvt.buf, raw, len);
+        SDL_FreeWAV(raw);
+        if (cvt.needed) SDL_ConvertAudio(&cvt);
+        pcm = (float *)cvt.buf;
+        frames = (uint32_t)(cvt.needed ? cvt.len_cvt : cvt.len) / 8;
+    }
+    SDL_LockMutex(mx);
+    if (!cached) {
+        free(extra[slot].pcm);
+        extra[slot].pcm = pcm;
+        extra[slot].frames = frames;
+        snprintf(extra[slot].path, sizeof extra[slot].path, "%s", path);
+    }
+    extra[slot].pos = 0;
+    extra[slot].gain = gain;
+    SDL_UnlockMutex(mx);
+}
+
 static void mix(void *ud, Uint8 *stream, int len) {
     (void)ud;
     float *out = (float *)stream;
@@ -121,6 +160,11 @@ static void mix(void *ud, Uint8 *stream, int len) {
             for (uint32_t n = 0; n < b->n_notify; n++)
                 if (b->notify_off[n] == 0xFFFFFFFFu) rt_signal_event(b->notify_ev[n]);  /* DSBPN_OFFSETSTOP */
     }
+    for (int k = 0; k < 4; k++)
+        for (int f = 0; f < frames && extra[k].pos < extra[k].frames; f++, extra[k].pos++) {
+            out[2 * f] += extra[k].pcm[2 * extra[k].pos] * extra[k].gain;
+            out[2 * f + 1] += extra[k].pcm[2 * extra[k].pos + 1] * extra[k].gain;
+        }
     SDL_UnlockMutex(mx);
     for (int i = 0; i < frames * 2; i++) out[i] = out[i] > 1 ? 1 : out[i] < -1 ? -1 : out[i];
     static FILE *wav;  /* debugging: SH2_WAV=file records the mix as raw float32 stereo at OUT_RATE */

@@ -12,5 +12,8 @@ etc=1
 sound=1
 movie=0
 ; resolution=1280x720    the default; 1920x1080 for docked play; 960x720 is the original 4:3
+; FlashlightToggleSFX=0  no click when the flashlight is switched (sh2e/sound/extra/flashlight_on/off.wav)
+; PreserveSoundsOnLoad=0 the game's own load and save sounds instead of sh2e/sound/extra/g_start.wav and
+;                        save_sound.wav, which keep playing through the loading screen
 ; cores=1                every game thread on one core (fallback if the music ever loops)
 ; log=1                  write sh2.log for bug reports (off by default; crashes always go to sh2-crash.log)
