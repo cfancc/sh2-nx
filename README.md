@@ -5,7 +5,7 @@
 </div>
 <h1 align=center>Silent Hill 2 — Nintendo Switch port</h1>
 
-<p align=center><b>v0.63</b></p>
+<p align=center><b>v0.64</b></p>
 
 A native Nintendo Switch port of the PC version of **Silent Hill 2** (Director's Cut / Restless Dreams), with
 support for the packs of **[Silent Hill 2: Enhanced Edition](https://enhanced.townofsilenthill.com/SH2/)**.
@@ -32,6 +32,12 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
 - **Saving and loading**, movies with synced audio, every menu.
 - **Shader cache**: shaders are compiled once and kept on the SD card, so areas only stutter the first time.
 - Also builds for Linux (x86-64), which is where most of the debugging happens.
+
+## What's new in v0.64
+
+- **Enhanced Edition extra sounds**: a click when the flashlight is switched, and load and save sounds that play
+  through the loading screen instead of being cut off (`FlashlightToggleSFX` and `PreserveSoundsOnLoad` in
+  `sh2e.ini`, on by default with the sounds in `sh2e/sound/extra`). Thanks to GloriousCheese for the request.
 
 ## What's new in v0.63
 
