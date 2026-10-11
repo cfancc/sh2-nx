@@ -5,7 +5,7 @@
 </div>
 <h1 align=center>Silent Hill 2 — Nintendo Switch port</h1>
 
-<p align=center><b>v0.62</b></p>
+<p align=center><b>v0.63</b></p>
 
 A native Nintendo Switch port of the PC version of **Silent Hill 2** (Director's Cut / Restless Dreams), with
 support for the packs of **[Silent Hill 2: Enhanced Edition](https://enhanced.townofsilenthill.com/SH2/)**.
@@ -32,6 +32,11 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
 - **Saving and loading**, movies with synced audio, every menu.
 - **Shader cache**: shaders are compiled once and kept on the SD card, so areas only stutter the first time.
 - Also builds for Linux (x86-64), which is where most of the debugging happens.
+
+## What's new in v0.63
+
+- **Black rooms in Pete's Bowl-O-Rama** fixed (after the Eddie and Laura cutscene, every room drew black): a function
+  the room lighting jumps to had been missed by the recompiler. Thanks to GloriousCheese for the report and the save.
 
 ## What's new in v0.62
 
