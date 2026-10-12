@@ -168,7 +168,8 @@ static void mix(void *ud, Uint8 *stream, int len) {
     SDL_UnlockMutex(mx);
     for (int i = 0; i < frames * 2; i++) out[i] = out[i] > 1 ? 1 : out[i] < -1 ? -1 : out[i];
     static FILE *wav;  /* debugging: SH2_WAV=file records the mix as raw float32 stereo at OUT_RATE */
-    if (!wav && getenv("SH2_WAV")) wav = fopen(getenv("SH2_WAV"), "wb");
+    static int wav_checked;
+    if (!wav_checked) { wav_checked = 1; if (getenv("SH2_WAV")) wav = fopen(getenv("SH2_WAV"), "wb"); }
     if (wav) fwrite(out, 8, frames, wav);
 }
 

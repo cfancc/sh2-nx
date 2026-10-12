@@ -1,6 +1,6 @@
 ; Enhanced Edition packs: data/<folder>/X is read from sh2e/<folder>/X when it exists (1 = on).
 ; The title and save screen art always comes from sh2e/ when it is there.
-; movie stays 0: the FMV pack plays at half speed until its frame-rate patch is ported.
+; movie: the FMV pack's 60 fps videos play at speed now, but 1080p60 Bink decoding is heavy for the Switch (frames are dropped).
 pic=1
 menu=1
 bg=1
@@ -12,6 +12,9 @@ etc=1
 sound=1
 movie=0
 ; resolution=1280x720    the default; 1920x1080 for docked play; 960x720 is the original 4:3
+; handheld=480           lines the screen-sized render targets are drawn with in handheld mode (then scaled to
+; docked=720             the screen), and docked; the defaults. 0 draws them at the game's resolution
+; fps=30                 the original 30 fps (the default is 60: EE SetSixtyFPS with its frame-timing fixes)
 ; FlashlightToggleSFX=0  no click when the flashlight is switched (sh2e/sound/extra/flashlight_on/off.wav)
 ; PreserveSoundsOnLoad=0 the game's own load and save sounds instead of sh2e/sound/extra/g_start.wav and
 ;                        save_sound.wav, which keep playing through the loading screen

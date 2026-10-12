@@ -15,6 +15,8 @@ void host_thread_pause(HostThread *t);
 void host_thread_resume(HostThread *t);
 void host_thread_signal(HostThread *t, int sig);  /* Linux debugging (SH2_DUMP_AFTER) */
 
+int host_console_docked(void);  /* the Switch in its dock (1) or handheld (0); Linux: 0 with SH2_HANDHELD set */
+
 void *host_arena_reserve(void);                     /* 4 GB of address space for the guest */
 void host_arena_commit(uint32_t va, uint32_t len);  /* backs [va, va+len) with zeroed memory */
 void host_crash_handlers(void (*on_crash)(uintptr_t addr));

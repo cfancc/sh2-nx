@@ -147,6 +147,8 @@ void __libnx_exception_handler(ThreadExceptionDump *ctx) {
 void host_crash_handlers(void (*on_crash)(uintptr_t addr)) { crash_cb = on_crash; }
 void host_backtrace(int fd) { (void)fd; }
 
+int host_console_docked(void) { return appletGetOperationMode() == AppletOperationMode_Console; }
+
 #else
 /* ======================================================================== Linux */
 #include <signal.h>
@@ -165,6 +167,7 @@ static void on_pause(int sig) {
 
 static void alt_stack(void);
 void host_use_single_core(int core) { (void)core; }
+int host_console_docked(void) { return getenv("SH2_HANDHELD") == NULL; }
 
 static void *thread_entry(void *p) {
     self = p;

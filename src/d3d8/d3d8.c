@@ -1,5 +1,6 @@
 /* IDirect3D8 and IDirect3DDevice8 on OpenGL. */
 #include "d3d8.h"
+#include "../runtime/host.h"
 #include <math.h>
 
 Dev *dev;
@@ -7,6 +8,136 @@ static uint32_t d3d_obj;
 
 static float f32(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
 static uint32_t u32(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+
+/* ---- cached GL state ----
+ * What GL currently holds, as far as this file set it. UNSET means "not known", so the first use after
+ * the context is created sets it. A draw compares against this and only calls GL for what differs. */
+#define UNSET 0xFFFFFFFFu
+#define TEX_UNITS 16
+enum { CAP_DEPTH, CAP_BLEND, CAP_CULL, CAP_STENCIL, CAP_SCISSOR, CAP_POLYOFF, CAP_DEPTHCLAMP, CAP_COUNT };
+static const GLenum cap_enum[CAP_COUNT] = {GL_DEPTH_TEST, GL_BLEND, GL_CULL_FACE, GL_STENCIL_TEST, GL_SCISSOR_TEST,
+                                           GL_POLYGON_OFFSET_FILL, GL_DEPTH_CLAMP};
+typedef struct { GLuint buf; GLint size; GLenum type; GLint norm; GLsizei stride; uintptr_t off; } Attr;  /* compared whole: no padding */
+static struct {
+    uint32_t cap[CAP_COUNT];
+    uint32_t depth_func, depth_mask, blend_src, blend_dst, blend_eq, cull_face, front_face;
+    uint32_t sfunc, sref, smask, sop[3], swmask, cmask, poly, poff_set;
+    float poff;
+    uint32_t vp[4], dr_set, sc[4];
+    float dr[2];
+    uint32_t active_unit, tex[TEX_UNITS][2];  /* [unit][0: 2D, 1: cube] */
+    uint32_t array_buf, elem_buf, fbo[2];     /* [0: read, 1: draw] */
+    uint32_t attr_on;                         /* enabled vertex attribute arrays, bit per location */
+    Attr attr[16];
+    uint32_t program;
+    float clear_color[4];
+    uint32_t clear_set;
+} gls;
+
+static void gls_reset(void) {
+    memset(&gls, 0xFF, sizeof gls);  /* every uint32_t field becomes UNSET */
+    gls.attr_on = 0;                 /* a fresh VAO has every array disabled */
+    gls.clear_set = 0;
+    gls.dr_set = 0;
+    gls.poff_set = 0;
+}
+
+void gls_enable(GLenum cap, int on) {
+    int i = 0;
+    while (i < CAP_COUNT && cap_enum[i] != cap) i++;
+    if (i == CAP_COUNT) { if (on) glEnable(cap); else glDisable(cap); return; }
+    if (gls.cap[i] == (uint32_t)on) return;
+    gls.cap[i] = on;
+    if (on) glEnable(cap); else glDisable(cap);
+}
+static void gls_active_unit(int unit) {
+    if (gls.active_unit == (uint32_t)unit) return;
+    gls.active_unit = unit;
+    glActiveTexture(GL_TEXTURE0 + unit);
+}
+void gls_bind_texture(int unit, GLenum target, GLuint tex) {
+    int t = target == GL_TEXTURE_CUBE_MAP;
+    gls_active_unit(unit);
+    if (gls.tex[unit][t] == tex) return;
+    gls.tex[unit][t] = tex;
+    glBindTexture(target, tex);
+}
+static GLuint present_fbo, present_tex;  /* Present's read framebuffer and what it has attached */
+void gls_texture_deleted(GLuint tex) {
+    if (present_tex == tex) present_tex = 0;
+    for (int u = 0; u < TEX_UNITS; u++)
+        for (int t = 0; t < 2; t++)
+            if (gls.tex[u][t] == tex) gls.tex[u][t] = 0;
+}
+void gls_bind_buffer(GLenum target, GLuint buf) {
+    uint32_t *slot = target == GL_ELEMENT_ARRAY_BUFFER ? &gls.elem_buf : &gls.array_buf;
+    if (*slot == buf) return;
+    *slot = buf;
+    glBindBuffer(target, buf);
+}
+void gls_buffer_deleted(GLuint buf) {
+    /* GL resets a deleted buffer's bindings to 0, in the VAO's attribute arrays included; a new buffer may
+     * then get the same name, so those entries become unknown rather than 0. */
+    if (gls.array_buf == buf) gls.array_buf = UNSET;
+    if (gls.elem_buf == buf) gls.elem_buf = UNSET;
+    for (int i = 0; i < 16; i++)
+        if (gls.attr[i].buf == buf) gls.attr[i].buf = UNSET;
+}
+void gls_bind_framebuffer(GLenum target, GLuint fbo) {
+    int rd = target != GL_DRAW_FRAMEBUFFER, dr = target != GL_READ_FRAMEBUFFER;
+    if ((!rd || gls.fbo[0] == fbo) && (!dr || gls.fbo[1] == fbo)) return;
+    if (rd) gls.fbo[0] = fbo;
+    if (dr) gls.fbo[1] = fbo;
+    glBindFramebuffer(target, fbo);
+}
+void gls_color_mask(int r, int g, int b, int a) {
+    uint32_t m = (r != 0) | (g != 0) << 1 | (b != 0) << 2 | (a != 0) << 3;
+    if (gls.cmask == m) return;
+    gls.cmask = m;
+    glColorMask(r != 0, g != 0, b != 0, a != 0);
+}
+void gls_depth_mask(int on) {
+    if (gls.depth_mask == (uint32_t)(on != 0)) return;
+    gls.depth_mask = on != 0;
+    glDepthMask(on != 0);
+}
+void gls_stencil_mask(uint32_t m) {
+    if (gls.swmask == m) return;
+    gls.swmask = m;
+    glStencilMask(m);
+}
+void gls_scissor(int x, int y, int w, int h) {
+    uint32_t v[4] = {(uint32_t)x, (uint32_t)y, (uint32_t)w, (uint32_t)h};
+    if (!memcmp(gls.sc, v, sizeof v)) return;
+    memcpy(gls.sc, v, sizeof v);
+    glScissor(x, y, w, h);
+}
+static void gls_viewport(int x, int y, int w, int h) {
+    uint32_t v[4] = {(uint32_t)x, (uint32_t)y, (uint32_t)w, (uint32_t)h};
+    if (!memcmp(gls.vp, v, sizeof v)) return;
+    memcpy(gls.vp, v, sizeof v);
+    glViewport(x, y, w, h);
+}
+static void gls_depth_range(float lo, float hi) {
+    if (gls.dr_set && gls.dr[0] == lo && gls.dr[1] == hi) return;
+    gls.dr_set = 1;
+    gls.dr[0] = lo;
+    gls.dr[1] = hi;
+    glDepthRange(lo, hi);
+}
+void gls_use_program(GLuint id) {
+    if (gls.program == id) return;
+    gls.program = id;
+    glUseProgram(id);
+}
+static void gls_clear_color(float r, float g, float b, float a) {
+    float c[4] = {r, g, b, a};
+    if (gls.clear_set && !memcmp(gls.clear_color, c, sizeof c)) return;
+    gls.clear_set = 1;
+    memcpy(gls.clear_color, c, sizeof c);
+    glClearColor(r, g, b, a);
+}
+#define GLS_SET(field, value, call) do { if (gls.field != (uint32_t)(value)) { gls.field = (value); call; } } while (0)
 
 /* ---- IDirect3D8 ---- */
 
@@ -118,6 +249,39 @@ METHOD(d3d_GetAdapterMonitor, 2) { return 1; }
 static uint32_t device_vtable(void);
 static void device_reset(uint32_t pp);
 
+/* ---- render scale (see d3d8.h) ----
+ * sh2e.ini: handheld=480 and docked=720 (the defaults) give the number of lines screen-sized targets
+ * are drawn with in each mode; 0 draws them at the game's resolution. The mode is read every frame,
+ * so docking or undocking switches at the next Present. On Linux SH2_HANDHELD=1 plays handheld. */
+float rt_scale = 1;
+static uint32_t scale_lines[2] = {480, 720};  /* [handheld, docked] */
+static int scale_mode = -1;
+
+static void render_scale_update(void) {
+    int docked = host_console_docked();
+    if (docked == scale_mode) return;
+    scale_mode = docked;
+    uint32_t lines = scale_lines[docked ? 1 : 0];
+    float s = lines && dev->bb_h ? (float)lines / dev->bb_h : 1;
+    if (s > 1) s = 1;  /* never more than the game's own resolution */
+    if (s == rt_scale) return;
+    rt_scale = s;
+    res_targets_forget();
+    rt_log("render scale: %s, %ux%u targets drawn at %ux%u", docked ? "docked" : "handheld", dev->bb_w, dev->bb_h,
+           (unsigned)scaled_px(dev->bb_w, s), (unsigned)scaled_px(dev->bb_h, s));
+}
+
+static void render_scale_init(void) {
+    FILE *f = fopen("sh2e.ini", "r");
+    char line[128];
+    unsigned v;
+    while (f && fgets(line, sizeof line, f)) {
+        if (sscanf(line, " handheld = %u", &v) == 1) scale_lines[0] = v;
+        if (sscanf(line, " docked = %u", &v) == 1) scale_lines[1] = v;
+    }
+    if (f) fclose(f);
+}
+
 METHOD(d3d_CreateDevice, 7) {
     uint32_t pp = ARG(5);
     rt_log("CreateDevice %ux%u fmt %u windowed %u depth %u/%u flags %08X", MEM32(pp), MEM32(pp + 4),
@@ -145,12 +309,15 @@ METHOD(d3d_CreateDevice, 7) {
         glClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE);  /* D3D's y-down rows and [0,1] depth */
         dev = calloc(1, sizeof *dev);
         dev->obj = com_new(device_vtable(), 16);
+        dev->vsc_gen = dev->psc_gen = dev->xform_gen = dev->texm_gen = dev->mat_gen = 1;
         res_init_vtables();
+        gls_reset();
         glGenFramebuffers(1, &dev->fbo);
         glGenVertexArrays(1, &dev->vao);
         glBindVertexArray(dev->vao);
         glGenBuffers(1, &dev->stream_buf);
         glGenBuffers(1, &dev->index_buf);
+        render_scale_init();
     }
     device_reset(pp);
     /* Like D3D8 on Windows: without D3DCREATE_FPU_PRESERVE the creating thread's x87 is switched to
@@ -180,6 +347,7 @@ WINAPI(Direct3DCreate8, "Direct3DCreate8", 1) {
 /* ---- device state ---- */
 
 static const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+static void all_changed(void) { dev->vsc_gen++; dev->psc_gen++; dev->xform_gen++; dev->texm_gen++; dev->mat_gen++; }
 
 static void set_defaults(int autodepth) {
     memset(dev->rs, 0, sizeof dev->rs);
@@ -234,6 +402,7 @@ static void set_defaults(int autodepth) {
     memset(dev->tex, 0, sizeof dev->tex);
     memset(dev->stream, 0, sizeof dev->stream);
     dev->ib = dev->vs = dev->ps = 0;
+    all_changed();
 }
 
 static void device_reset(uint32_t pp) {
@@ -258,6 +427,8 @@ static void device_reset(uint32_t pp) {
     dev->vp_h = h;
     dev->vp_minz = 0;
     dev->vp_maxz = 1;
+    scale_mode = -1;  /* the scale follows the new size */
+    render_scale_update();
     res_bind_targets();
 }
 
@@ -293,41 +464,50 @@ METHOD(dev_Present, 5) {
     int ww, wh;
     SDL_GL_GetDrawableSize(rt_window, &ww, &wh);
     Res *bb = res_of(dev->backbuffer);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, dev->fbo);
-    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, bb->tex, 0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    glDisable(GL_SCISSOR_TEST);
-    glClearColor(0, 0, 0, 1);
+    /* The back buffer is read through an FBO of its own, so dev->fbo keeps its attachments. */
+    if (!present_fbo) glGenFramebuffers(1, &present_fbo);
+    GLuint tex = bb->tex;  /* created by res_bind_targets: every frame starts bound */
+    gls_bind_framebuffer(GL_READ_FRAMEBUFFER, present_fbo);
+    if (present_tex != tex) {
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+        present_tex = tex;
+    }
+    gls_bind_framebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    gls_enable(GL_SCISSOR_TEST, 0);
+    gls_clear_color(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     /* Keep the game's aspect ratio inside the window; rows flip because the window's row 0 is its bottom. */
     float s = fminf((float)ww / bb->w, (float)wh / bb->h);
     int dw = bb->w * s, dh = bb->h * s, dx = (ww - dw) / 2, dy = (wh - dh) / 2;
-    glBlitFramebuffer(0, 0, bb->w, bb->h, dx, dy + dh, dx + dw, dy, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBlitFramebuffer(0, 0, bb->tw, bb->th, dx, dy + dh, dx + dw, dy, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     res_snapshot_front();
     static int frame;
     rt_frame++;
     /* debugging: SH2_SHOT=dir writes frames 0-9, then every SH2_SHOT_EVERY-th (30), as PPM */
-    const char *shot = getenv("SH2_SHOT"), *every = getenv("SH2_SHOT_EVERY");
+    static const char *shot, *every;
+    static int env_read, stats;
+    if (!env_read) { env_read = 1; shot = getenv("SH2_SHOT"); every = getenv("SH2_SHOT_EVERY"); stats = getenv("SH2_STATS") != NULL; }
     if (shot && (frame++ < 10 || frame % (every ? atoi(every) : 30) == 1)) {
         char path[512];
         snprintf(path, sizeof path, "%s/frame%05d.ppm", shot, frame - 1);
-        uint8_t *px = malloc(bb->w * bb->h * 3);
+        uint8_t *px = malloc(bb->tw * bb->th * 3);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(0, 0, bb->w, bb->h, GL_RGB, GL_UNSIGNED_BYTE, px);
+        glReadPixels(0, 0, bb->tw, bb->th, GL_RGB, GL_UNSIGNED_BYTE, px);
         FILE *f = fopen(path, "wb");
-        if (f) { fprintf(f, "P6 %u %u 255\n", bb->w, bb->h); fwrite(px, 3, bb->w * bb->h, f); fclose(f); }
+        if (f) { fprintf(f, "P6 %u %u 255\n", bb->tw, bb->th); fwrite(px, 3, bb->tw * bb->th, f); fclose(f); }
         free(px);
     }
     SDL_GL_SwapWindow(rt_window);
     static Uint64 stat_t0;
     static int stat_frames;
-    if (getenv("SH2_STATS") && ++stat_frames == 120) {  /* debugging: FPS and guest heap */
+    if (stats && ++stat_frames == 120) {  /* debugging: FPS and guest heap */
         Uint64 now = SDL_GetTicks64();
         if (stat_t0) rt_log("stats: %.1f fps, guest heap %u MB", 120000.0 / (now - stat_t0), rt_heap_used() >> 20);
         stat_t0 = now;
         stat_frames = 0;
     }
     rt_pump_events();
+    render_scale_update();  /* docked or undocked since the last frame: the targets are remade below */
     res_bind_targets();
     return 0;
 }
@@ -377,24 +557,34 @@ METHOD(dev_EndScene, 1) { return 0; }
 
 static void apply_viewport_scissor(int scissor);
 
+/* Game pixels to GL texels of the bound render target (1, 1 unless it is render-scaled). */
+static void rt_factors(float *sx, float *sy) {
+    Res *r = res_of(dev->rt);
+    if (r) res_scale_factors(r, sx, sy);
+    else *sx = *sy = 1;
+}
+
 METHOD(dev_Clear, 7) {
     uint32_t flags = ARG(3), c = ARG(4);
     GLbitfield mask = 0;
     if (flags & 1) {
-        glClearColor((c >> 16 & 255) / 255.f, (c >> 8 & 255) / 255.f, (c & 255) / 255.f, (c >> 24) / 255.f);
-        glColorMask(1, 1, 1, 1);
+        gls_clear_color((c >> 16 & 255) / 255.f, (c >> 8 & 255) / 255.f, (c & 255) / 255.f, (c >> 24) / 255.f);
+        gls_color_mask(1, 1, 1, 1);
         mask |= GL_COLOR_BUFFER_BIT;
     }
-    if ((flags & 2) && dev->ds) { glClearDepth(f32(ARG(5))); glDepthMask(1); mask |= GL_DEPTH_BUFFER_BIT; }
-    if ((flags & 4) && dev->ds) { glClearStencil(ARG(6)); glStencilMask(0xFF); mask |= GL_STENCIL_BUFFER_BIT; }
+    if ((flags & 2) && dev->ds) { glClearDepth(f32(ARG(5))); gls_depth_mask(1); mask |= GL_DEPTH_BUFFER_BIT; }
+    if ((flags & 4) && dev->ds) { glClearStencil(ARG(6)); gls_stencil_mask(0xFF); mask |= GL_STENCIL_BUFFER_BIT; }
     apply_viewport_scissor(1);
-    if (ARG(1) && ARG(2))
+    if (ARG(1) && ARG(2)) {
+        float sx, sy;
+        rt_factors(&sx, &sy);
         for (uint32_t i = 0; i < ARG(1); i++) {
             int32_t *r = GPTR(ARG(2) + 16 * i);  /* D3DRECT x1 y1 x2 y2 */
-            glScissor(r[0], r[1], r[2] - r[0], r[3] - r[1]);
+            int x0 = scaled_px(r[0], sx), y0 = scaled_px(r[1], sy);
+            gls_scissor(x0, y0, scaled_px(r[2], sx) - x0, scaled_px(r[3], sy) - y0);
             glClear(mask);
         }
-    else glClear(mask);
+    } else glClear(mask);
     return 0;
 }
 
@@ -405,9 +595,13 @@ static float *transform_slot(uint32_t t) {
     if (t >= 256 && t < 260) return dev->world[t - 256];
     return NULL;
 }
+static void transform_changed(uint32_t t) {
+    if (t >= 16 && t < 24) dev->texm_gen++;
+    else dev->xform_gen++;
+}
 METHOD(dev_SetTransform, 3) {
     float *m = transform_slot(ARG(1));
-    if (m) memcpy(m, GPTR(ARG(2)), 64);
+    if (m && memcmp(m, GPTR(ARG(2)), 64)) { memcpy(m, GPTR(ARG(2)), 64); transform_changed(ARG(1)); }
     return 0;
 }
 METHOD(dev_GetTransform, 3) {
@@ -423,6 +617,7 @@ METHOD(dev_MultiplyTransform, 3) {
         for (int j = 0; j < 4; j++)
             r[i * 4 + j] = m[i * 4] * b[j] + m[i * 4 + 1] * b[4 + j] + m[i * 4 + 2] * b[8 + j] + m[i * 4 + 3] * b[12 + j];
     memcpy(m, r, 64);
+    transform_changed(ARG(1));
     return 0;
 }
 METHOD(dev_SetViewport, 2) {
@@ -437,7 +632,7 @@ METHOD(dev_GetViewport, 2) {
     MEMF(v + 16) = dev->vp_minz; MEMF(v + 20) = dev->vp_maxz;
     return 0;
 }
-METHOD(dev_SetMaterial, 2) { memcpy(dev->material, GPTR(ARG(1)), 68); return 0; }
+METHOD(dev_SetMaterial, 2) { memcpy(dev->material, GPTR(ARG(1)), 68); dev->mat_gen++; return 0; }
 METHOD(dev_GetMaterial, 2) { memcpy(GPTR(ARG(1)), dev->material, 68); return 0; }
 /* D3DLIGHT8: Type, Diffuse, Specular, Ambient, Position, Direction, Range, Falloff, Att0-2, Theta, Phi. */
 METHOD(dev_SetLight, 3) {
@@ -451,13 +646,17 @@ METHOD(dev_SetLight, 3) {
         memcpy(l->pos, GPTR(p + 52), 12);
         memcpy(l->dir, GPTR(p + 64), 12);
         memcpy(&l->range, GPTR(p + 76), 28);
+        dev->mat_gen++;
     }
     return 0;
 }
-METHOD(dev_LightEnable, 3) { if (ARG(1) < 8) dev->light_on[ARG(1)] = ARG(2) != 0; return 0; }
+METHOD(dev_LightEnable, 3) { if (ARG(1) < 8) { dev->light_on[ARG(1)] = ARG(2) != 0; dev->mat_gen++; } return 0; }
 METHOD(dev_GetLightEnable, 3) { MEM32(ARG(2)) = ARG(1) < 8 && dev->light_on[ARG(1)]; return 0; }
 METHOD(dev_SetClipPlane, 3) { return 0; }
-METHOD(dev_SetRenderState, 3) { if (ARG(1) < RS_COUNT) dev->rs[ARG(1)] = ARG(2); return 0; }
+METHOD(dev_SetRenderState, 3) {
+    if (ARG(1) < RS_COUNT) { dev->rs[ARG(1)] = ARG(2); if (ARG(1) == 139) dev->mat_gen++; }  /* AMBIENT */
+    return 0;
+}
 METHOD(dev_GetRenderState, 3) { MEM32(ARG(2)) = ARG(1) < RS_COUNT ? dev->rs[ARG(1)] : 0; return 0; }
 
 /* ---- state blocks: snapshots of everything a state block can hold ---- */
@@ -489,6 +688,7 @@ static void block_apply(const Block *b) {
     dev->ib = b->ib; dev->base_vertex = b->base_vertex; dev->vs = b->vs; dev->ps = b->ps;
     dev->vp_x = b->vp[0]; dev->vp_y = b->vp[1]; dev->vp_w = b->vp[2]; dev->vp_h = b->vp[3];
     dev->vp_minz = b->vp[4]; dev->vp_maxz = b->vp[5];
+    all_changed();
 }
 static uint32_t block_new(void) {
     for (uint32_t i = 1; i < 1024; i++)
@@ -549,44 +749,64 @@ static GLenum stencil_op(uint32_t o) {
 static GLenum cmp_func(uint32_t c) { return c >= 1 && c <= 8 ? GL_NEVER + c - 1 : GL_ALWAYS; }
 
 static void apply_viewport_scissor(int scissor) {
-    glViewport(dev->vp_x, dev->vp_y, dev->vp_w, dev->vp_h);
-    glDepthRange(dev->vp_minz, dev->vp_maxz);
-    if (scissor) { glEnable(GL_SCISSOR_TEST); glScissor(dev->vp_x, dev->vp_y, dev->vp_w, dev->vp_h); }
-    else glDisable(GL_SCISSOR_TEST);
+    float sx, sy;
+    rt_factors(&sx, &sy);
+    int x = scaled_px(dev->vp_x, sx), y = scaled_px(dev->vp_y, sy);
+    int w = scaled_px(dev->vp_x + dev->vp_w, sx) - x, h = scaled_px(dev->vp_y + dev->vp_h, sy) - y;
+    gls_viewport(x, y, w, h);
+    gls_depth_range(dev->vp_minz, dev->vp_maxz);
+    gls_enable(GL_SCISSOR_TEST, scissor);
+    if (scissor) gls_scissor(x, y, w, h);
 }
 
 static void apply_render_states(void) {
     uint32_t *rs = dev->rs;
     apply_viewport_scissor(0);
-    if (rs[7] && dev->ds) { glEnable(GL_DEPTH_TEST); glDepthFunc(cmp_func(rs[23])); }
-    else glDisable(GL_DEPTH_TEST);
-    glDepthMask(rs[14] && dev->ds);
+    if (rs[7] && dev->ds) { gls_enable(GL_DEPTH_TEST, 1); GLS_SET(depth_func, cmp_func(rs[23]), glDepthFunc(gls.depth_func)); }
+    else gls_enable(GL_DEPTH_TEST, 0);
+    gls_depth_mask(rs[14] && dev->ds);
     if (rs[27]) {
-        glEnable(GL_BLEND);
+        gls_enable(GL_BLEND, 1);
         uint32_t s = rs[19], d = rs[20];
         if (s == 12) { s = 5; d = 6; }        /* BOTHSRCALPHA */
         else if (s == 13) { s = 6; d = 5; }   /* BOTHINVSRCALPHA */
-        glBlendFuncSeparate(blend_factor(s), blend_factor(d), blend_factor(s), blend_factor(d));
+        GLenum bs = blend_factor(s), bd = blend_factor(d);
+        if (gls.blend_src != bs || gls.blend_dst != bd) {
+            gls.blend_src = bs;
+            gls.blend_dst = bd;
+            glBlendFuncSeparate(bs, bd, bs, bd);
+        }
         static const GLenum op[] = {GL_FUNC_ADD, GL_FUNC_ADD, GL_FUNC_SUBTRACT, GL_FUNC_REVERSE_SUBTRACT, GL_MIN, GL_MAX};
-        glBlendEquation(rs[171] < 6 ? op[rs[171]] : GL_FUNC_ADD);
-    } else glDisable(GL_BLEND);
-    if (rs[22] == 1) glDisable(GL_CULL_FACE);
+        GLS_SET(blend_eq, rs[171] < 6 ? op[rs[171]] : GL_FUNC_ADD, glBlendEquation(gls.blend_eq));
+    } else gls_enable(GL_BLEND, 0);
+    if (rs[22] == 1) gls_enable(GL_CULL_FACE, 0);
     else {
-        glEnable(GL_CULL_FACE);
-        glFrontFace(GL_CW);
-        glCullFace(rs[22] == 2 ? GL_FRONT : GL_BACK);  /* CULL_CW drops clockwise (front) faces */
+        gls_enable(GL_CULL_FACE, 1);
+        GLS_SET(front_face, GL_CW, glFrontFace(GL_CW));
+        GLS_SET(cull_face, rs[22] == 2 ? GL_FRONT : GL_BACK, glCullFace(gls.cull_face));  /* CULL_CW drops clockwise (front) faces */
     }
     if (rs[52] && dev->ds) {
-        glEnable(GL_STENCIL_TEST);
-        glStencilFunc(cmp_func(rs[56]), rs[57], rs[58]);
-        glStencilOpSeparate(GL_FRONT_AND_BACK, stencil_op(rs[53]), stencil_op(rs[54]), stencil_op(rs[55]));
-        glStencilMask(rs[59]);
-    } else glDisable(GL_STENCIL_TEST);
+        gls_enable(GL_STENCIL_TEST, 1);
+        GLenum f = cmp_func(rs[56]);
+        if (gls.sfunc != f || gls.sref != rs[57] || gls.smask != rs[58]) {
+            gls.sfunc = f; gls.sref = rs[57]; gls.smask = rs[58];
+            glStencilFunc(f, rs[57], rs[58]);
+        }
+        GLenum o[3] = {stencil_op(rs[53]), stencil_op(rs[54]), stencil_op(rs[55])};
+        if (memcmp(gls.sop, o, sizeof o)) {
+            memcpy(gls.sop, o, sizeof o);
+            glStencilOpSeparate(GL_FRONT_AND_BACK, o[0], o[1], o[2]);
+        }
+        gls_stencil_mask(rs[59]);
+    } else gls_enable(GL_STENCIL_TEST, 0);
     uint32_t cw = rs[168];
-    glColorMask(cw & 1, (cw >> 1) & 1, (cw >> 2) & 1, (cw >> 3) & 1);
-    glPolygonMode(GL_FRONT_AND_BACK, rs[8] == 1 ? GL_POINT : rs[8] == 2 ? GL_LINE : GL_FILL);
-    if (rs[47]) { glEnable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(0, -(float)rs[47]); }  /* ZBIAS */
-    else glDisable(GL_POLYGON_OFFSET_FILL);
+    gls_color_mask(cw & 1, (cw >> 1) & 1, (cw >> 2) & 1, (cw >> 3) & 1);
+    GLS_SET(poly, rs[8] == 1 ? GL_POINT : rs[8] == 2 ? GL_LINE : GL_FILL, glPolygonMode(GL_FRONT_AND_BACK, gls.poly));
+    if (rs[47]) {  /* ZBIAS */
+        gls_enable(GL_POLYGON_OFFSET_FILL, 1);
+        float off = -(float)rs[47];
+        if (!gls.poff_set || gls.poff != off) { gls.poff_set = 1; gls.poff = off; glPolygonOffset(0, off); }
+    } else gls_enable(GL_POLYGON_OFFSET_FILL, 0);
 }
 
 static GLenum prim_mode(uint32_t t) {
@@ -606,24 +826,33 @@ static uint32_t prim_verts(uint32_t t, uint32_t n) {
 /* Vertex attribute locations: D3DVSDE numbering for the fixed pipeline (0 position, 1 blend weights,
  * 2 blend indices, 3 normal, 4 point size, 5 diffuse, 6 specular, 7-14 texcoords); v# for shaders. */
 static void attrib(int loc, int type, GLsizei stride, uintptr_t off) {
-    glEnableVertexAttribArray(loc);
+    if (!(gls.attr_on & (1u << loc))) { gls.attr_on |= 1u << loc; glEnableVertexAttribArray(loc); }
+    Attr a;
+    memset(&a, 0, sizeof a);
+    a.buf = gls.array_buf; a.size = 4; a.type = GL_FLOAT; a.stride = stride; a.off = off;
     switch (type) {
-    case 0: case 1: case 2: case 3: glVertexAttribPointer(loc, type + 1, GL_FLOAT, 0, stride, (void *)off); break;
-    case 4: glVertexAttribPointer(loc, GL_BGRA, GL_UNSIGNED_BYTE, 1, stride, (void *)off); break;  /* D3DCOLOR */
-    case 5: glVertexAttribPointer(loc, 4, GL_UNSIGNED_BYTE, 0, stride, (void *)off); break;        /* UBYTE4 */
-    case 6: glVertexAttribPointer(loc, 2, GL_SHORT, 0, stride, (void *)off); break;
-    case 7: glVertexAttribPointer(loc, 4, GL_SHORT, 0, stride, (void *)off); break;
+    case 0: case 1: case 2: case 3: a.size = type + 1; break;
+    case 4: a.size = GL_BGRA; a.type = GL_UNSIGNED_BYTE; a.norm = 1; break;  /* D3DCOLOR */
+    case 5: a.type = GL_UNSIGNED_BYTE; break;                                /* UBYTE4 */
+    case 6: a.size = 2; a.type = GL_SHORT; break;
+    case 7: a.type = GL_SHORT; break;
     }
+    if (a.buf != UNSET && !memcmp(&gls.attr[loc], &a, sizeof a)) return;
+    gls.attr[loc] = a;
+    glVertexAttribPointer(loc, a.size, a.type, (GLboolean)a.norm, a.stride, (void *)a.off);
 }
 
 /* Sets up attributes for stream 0 (FVF) or the declaration's streams. base: GL buffer offsets of each
  * stream's vertex 0; up_stride: stride for DrawPrimitiveUP. Returns 1 when vertices are pretransformed. */
 static int setup_attribs(const uintptr_t *base, const GLuint *bufs, uint32_t up_stride, int *present) {
-    for (int i = 0; i < 16; i++) { glDisableVertexAttribArray(i); present[i] = 0; }
+    for (int i = 0; i < 16; i++) {  /* arrays the last draw used and this one does not */
+        present[i] = 0;
+        if (gls.attr_on & (1u << i)) { gls.attr_on &= ~(1u << i); glDisableVertexAttribArray(i); }
+    }
     if (dev->vs < 0xF0000000u) {
         uint32_t fvf = dev->vs, stride = up_stride ? up_stride : dev->stride[0], off = 0;
         if (!bufs[0]) return 0;
-        glBindBuffer(GL_ARRAY_BUFFER, bufs[0]);
+        gls_bind_buffer(GL_ARRAY_BUFFER, bufs[0]);
         uint32_t pos = fvf & 0xE;
         int rhw = pos == 4;
         attrib(0, rhw ? 3 : 2, stride, base[0]);
@@ -653,7 +882,7 @@ static int setup_attribs(const uintptr_t *base, const GLuint *bufs, uint32_t up_
     for (int r = 0; r < 16; r++) {
         if (in[r].stream < 0 || !bufs[in[r].stream]) continue;
         int s = in[r].stream;
-        glBindBuffer(GL_ARRAY_BUFFER, bufs[s]);
+        gls_bind_buffer(GL_ARRAY_BUFFER, bufs[s]);
         attrib(r, in[r].type, up_stride ? up_stride : dev->stride[s], base[s] + in[r].offset);
         present[r] = 1;
     }
@@ -662,10 +891,9 @@ static int setup_attribs(const uintptr_t *base, const GLuint *bufs, uint32_t up_
 
 static void bind_textures(void) {
     for (int s = 0; s < MAX_STAGES; s++) {
-        glActiveTexture(GL_TEXTURE0 + s);
         Res *t = res_of(dev->tex[s]);
         if (t) res_upload_dirty(t);
-        glBindTexture(t && t->kind == RES_CUBE ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D, t ? t->tex : 0);
+        gls_bind_texture(s, t && t->kind == RES_CUBE ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D, t ? t->tex : 0);
     }
 }
 
@@ -676,7 +904,7 @@ static void draw_setup(const uintptr_t *base, const GLuint *bufs, uint32_t up_st
     int rhw = setup_attribs(base, bufs, up_stride, present);
     /* Screen-space vertices are never clipped by depth in D3D; UI quads sit at z = 0 or 1 exactly,
      * which nouveau's rounding pushes just outside the clip volume. */
-    if (rhw) glEnable(GL_DEPTH_CLAMP); else glDisable(GL_DEPTH_CLAMP);
+    gls_enable(GL_DEPTH_CLAMP, rhw);
     shader_bind_for_draw(rhw, dev->vs, present);
 }
 
@@ -684,8 +912,8 @@ static void draw_setup(const uintptr_t *base, const GLuint *bufs, uint32_t up_st
  * thread. */
 static GLuint gl_buffer(Res *b, GLenum target) {
     if (!b->buf) { glGenBuffers(1, &b->buf); b->dirty = 1; }
-    glBindBuffer(target, b->buf);
     if (b->dirty) {
+        gls_bind_buffer(target, b->buf);
         glBufferData(target, b->size, GPTR(b->mem), GL_DYNAMIC_DRAW);
         b->dirty = 0;
     }
@@ -716,23 +944,43 @@ METHOD(dev_DrawIndexedPrimitive, 6) {
     GLuint bufs[16];
     stream_bases(base, bufs);
     draw_setup(base, bufs, 0);
-    gl_buffer(ib, GL_ELEMENT_ARRAY_BUFFER);
+    gls_bind_buffer(GL_ELEMENT_ARRAY_BUFFER, gl_buffer(ib, GL_ELEMENT_ARRAY_BUFFER));
     int is32 = ib->fmt == FMT_INDEX32;
     glDrawElementsBaseVertex(prim_mode(ARG(1)), prim_verts(ARG(1), ARG(5)), is32 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT,
                              (void *)(uintptr_t)(ARG(4) * (is32 ? 4 : 2)), dev->base_vertex);
     return 0;
 }
 
-/* The UP draws stream vertices straight from guest memory; D3D8 then unbinds stream 0 and the indices. */
-static void up_upload(uint32_t data, uint32_t bytes) {
-    glBindBuffer(GL_ARRAY_BUFFER, dev->stream_buf);
-    glBufferData(GL_ARRAY_BUFFER, bytes, GPTR(data), GL_STREAM_DRAW);
+/* The UP draws stream vertices straight from guest memory; D3D8 then unbinds stream 0 and the indices.
+ * The data goes into a ring buffer, written through an unsynchronized map (no allocation and no wait per
+ * draw); when the ring is full it is orphaned and started over. Returns the offset of the data. */
+typedef struct { GLuint buf; uint32_t cap, at; } Ring;
+#define RING_BYTES (2u << 20)
+static uintptr_t ring_put(Ring *r, GLenum target, const void *data, uint32_t bytes) {
+    gls_bind_buffer(target, r->buf);
+    uint32_t need = bytes > RING_BYTES ? bytes : RING_BYTES;
+    if (r->cap < need || r->at + bytes > r->cap) {
+        if (r->cap < need) r->cap = need;
+        glBufferData(target, r->cap, NULL, GL_STREAM_DRAW);
+        r->at = 0;
+    }
+    uint32_t off = r->at;
+    void *p = bytes ? glMapBufferRange(target, off, bytes, GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT | GL_MAP_INVALIDATE_RANGE_BIT) : NULL;
+    if (p) { memcpy(p, data, bytes); glUnmapBuffer(target); }
+    else if (bytes) glBufferSubData(target, off, bytes, data);
+    r->at = (off + bytes + 63) & ~63u;
+    return off;
+}
+static Ring vring, iring;
+static uintptr_t up_upload(uint32_t data, uint32_t bytes) {
+    vring.buf = dev->stream_buf;
+    return ring_put(&vring, GL_ARRAY_BUFFER, GPTR(data), bytes);
 }
 METHOD(dev_DrawPrimitiveUP, 5) {
     uint32_t n = prim_verts(ARG(1), ARG(2)), stride = ARG(4);
-    up_upload(ARG(3), n * stride);
     uintptr_t base[16] = {0};
     GLuint bufs[16] = {dev->stream_buf};
+    base[0] = up_upload(ARG(3), n * stride);
     draw_setup(base, bufs, stride);
     glDrawArrays(prim_mode(ARG(1)), 0, n);
     if (dev->stream[0]) res_release(dev->stream[0]);
@@ -741,13 +989,13 @@ METHOD(dev_DrawPrimitiveUP, 5) {
 }
 METHOD(dev_DrawIndexedPrimitiveUP, 9) {
     uint32_t nidx = prim_verts(ARG(1), ARG(4)), isz = ARG(6) == FMT_INDEX32 ? 4 : 2, stride = ARG(8);
-    up_upload(ARG(7), (ARG(2) + ARG(3)) * stride);
     uintptr_t base[16] = {0};
     GLuint bufs[16] = {dev->stream_buf};
+    base[0] = up_upload(ARG(7), (ARG(2) + ARG(3)) * stride);
     draw_setup(base, bufs, stride);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dev->index_buf);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, nidx * isz, GPTR(ARG(5)), GL_STREAM_DRAW);
-    glDrawElements(prim_mode(ARG(1)), nidx, isz == 4 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT, 0);
+    iring.buf = dev->index_buf;
+    uintptr_t ioff = ring_put(&iring, GL_ELEMENT_ARRAY_BUFFER, GPTR(ARG(5)), nidx * isz);
+    glDrawElements(prim_mode(ARG(1)), nidx, isz == 4 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT, (void *)ioff);
     if (dev->stream[0]) res_release(dev->stream[0]);
     dev->stream[0] = 0;
     if (dev->ib) res_release(dev->ib);
@@ -761,7 +1009,7 @@ METHOD(dev_GetVertexShader, 2) { MEM32(ARG(1)) = dev->vs; return 0; }
 METHOD(dev_DeleteVertexShader, 2) { shader_delete_vs(ARG(1)); return 0; }
 METHOD(dev_SetVertexShaderConstant, 4) {
     uint32_t r = ARG(1), n = ARG(3);
-    if (r < 96) memcpy(dev->vsc[r], GPTR(ARG(2)), 16 * (r + n > 96 ? 96 - r : n));
+    if (r < 96) { memcpy(dev->vsc[r], GPTR(ARG(2)), 16 * (r + n > 96 ? 96 - r : n)); dev->vsc_gen++; }
     return 0;
 }
 METHOD(dev_GetVertexShaderConstant, 4) {
@@ -804,7 +1052,7 @@ METHOD(dev_GetPixelShader, 2) { MEM32(ARG(1)) = dev->ps; return 0; }
 METHOD(dev_DeletePixelShader, 2) { shader_delete_ps(ARG(1)); return 0; }
 METHOD(dev_SetPixelShaderConstant, 4) {
     uint32_t r = ARG(1), n = ARG(3);
-    if (r < 8) memcpy(dev->psc[r], GPTR(ARG(2)), 16 * (r + n > 8 ? 8 - r : n));
+    if (r < 8) { memcpy(dev->psc[r], GPTR(ARG(2)), 16 * (r + n > 8 ? 8 - r : n)); dev->psc_gen++; }
     return 0;
 }
 METHOD(dev_GetPixelShaderConstant, 4) {

@@ -91,7 +91,9 @@
     X(PFNGLBINDSAMPLERPROC, glBindSampler) \
     X(PFNGLSAMPLERPARAMETERIPROC, glSamplerParameteri) \
     X(PFNGLSAMPLERPARAMETERFPROC, glSamplerParameterf) \
-    X(PFNGLSAMPLERPARAMETERFVPROC, glSamplerParameterfv)
+    X(PFNGLSAMPLERPARAMETERFVPROC, glSamplerParameterfv) \
+    X(PFNGLMAPBUFFERRANGEPROC, glMapBufferRange) \
+    X(PFNGLUNMAPBUFFERPROC, glUnmapBuffer)
 
 #define GL_DECLARE(type, name) extern type p_##name;
 GL_FUNCS(GL_DECLARE)
@@ -183,6 +185,8 @@ GL_FUNCS(GL_DECLARE)
 #define glSamplerParameteri p_glSamplerParameteri
 #define glSamplerParameterf p_glSamplerParameterf
 #define glSamplerParameterfv p_glSamplerParameterfv
+#define glMapBufferRange p_glMapBufferRange
+#define glUnmapBuffer p_glUnmapBuffer
 #endif
 
 void gl_load(void);

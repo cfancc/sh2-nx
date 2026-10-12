@@ -135,10 +135,21 @@ WINAPI(BinkClose, "_BinkClose@4", 1) {
     return 0;
 }
 
+/* Decodes the frame the game is about to show. When the game fell behind the clock by whole frames (the
+ * FMV pack's 60 fps videos on a slow frame), the frames it is late for are decoded and dropped first,
+ * their sound still queued, so the picture and the soundtrack keep time instead of slowing down. */
 WINAPI(BinkDoFrame, "_BinkDoFrame@4", 1) {
     Movie *m = movie(ARG(0));
-    if (m && !m->t0) m->t0 = SDL_GetTicks64();
-    if (m) decode_video(m);  /* past the end, the last frame stays */
+    uint32_t b = ARG(0);
+    if (!m) return 0;
+    if (!m->t0) m->t0 = SDL_GetTicks64();
+    uint32_t rate = MEM32(b + 20), div = MEM32(b + 24), frames = MEM32(b + 8), n = MEM32(b + 12);
+    if (rate && !m->paused_at) {
+        uint32_t due = (uint32_t)((SDL_GetTicks64() - m->t0) * rate / (1000 * div)) + 1;  /* the frame for now */
+        for (int dropped = 0; n + 1 < due && n < frames && dropped < 4; dropped++, n++) decode_video(m);
+        if (n != MEM32(b + 12)) { MEM32(b + 16) = n - 1; MEM32(b + 12) = n; }
+    }
+    decode_video(m);  /* past the end, the last frame stays */
     return 0;
 }
 

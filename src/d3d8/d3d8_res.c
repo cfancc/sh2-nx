@@ -81,9 +81,15 @@ static Res *new_res(int kind, uint32_t vtable) {
     return r;
 }
 
+static void delete_texture(GLuint tex) {
+    glDeleteTextures(1, &tex);
+    gls_texture_deleted(tex);  /* GL drops a deleted texture from every unit and the bound framebuffer */
+    res_targets_forget();
+}
+
 static void free_res(Res *r) {
-    if (r->tex && !r->parent) glDeleteTextures(1, &r->tex);
-    if (r->buf) glDeleteBuffers(1, &r->buf);
+    if (r->tex && !r->parent) delete_texture(r->tex);
+    if (r->buf) { glDeleteBuffers(1, &r->buf); gls_buffer_deleted(r->buf); }
     if (r->mem) gfree(r->mem);
     for (int f = 0; f < 6; f++)
         for (int l = 0; l < 14; l++)
@@ -165,19 +171,30 @@ static GLenum face_target(Res *t, int face) {
     return t->kind == RES_CUBE ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : GL_TEXTURE_2D;
 }
 
-/* Creates the GL texture of a texture or standalone surface, with every level allocated. */
+/* Screen-sized render and depth targets are the ones drawn at rt_scale (d3d8.h). */
+int res_scaled(const Res *t) {
+    return rt_scale != 1 && (t->is_rt || t->is_depth) && t->kind != RES_CUBE && t->w == dev->bb_w && t->h == dev->bb_h;
+}
+
+/* Creates the GL texture of a texture or standalone surface, with every level allocated. A render-scaled
+ * target made for another scale is remade (its contents are lost: the game redraws them). */
 static void gl_ensure(Res *t) {
-    if (t->tex) return;
+    float want = res_scaled(t) ? rt_scale : 1;
+    if (t->tex && t->tex_scale == want) return;
+    if (t->tex) delete_texture(t->tex);
+    t->tex_scale = want;
+    t->tw = want == 1 ? t->w : (uint32_t)(scaled_px(t->w, want) > 0 ? scaled_px(t->w, want) : 1);
+    t->th = want == 1 ? t->h : (uint32_t)(scaled_px(t->h, want) > 0 ? scaled_px(t->h, want) : 1);
     const Fmt *f = fmt_info(t->fmt);
     GLenum target = t->kind == RES_CUBE ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
     glGenTextures(1, &t->tex);
-    glBindTexture(target, t->tex);
+    gls_bind_texture(0, target, t->tex);
     uint32_t levels = t->kind == RES_SURFACE ? 1 : t->levels;
     glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, levels - 1);
     glTexParameteriv(target, GL_TEXTURE_SWIZZLE_RGBA, f->swz);
     for (int face = 0; face < (t->kind == RES_CUBE ? 6 : 1); face++)
         for (uint32_t l = 0; l < levels; l++) {
-            uint32_t w = t->w >> l ? t->w >> l : 1, h = t->h >> l ? t->h >> l : 1, pitch, size;
+            uint32_t w = t->tw >> l ? t->tw >> l : 1, h = t->th >> l ? t->th >> l : 1, pitch, size;
             if (t->is_depth)
                 glTexImage2D(face_target(t, face), l, GL_DEPTH24_STENCIL8, w, h, 0, GL_DEPTH_STENCIL,
                              GL_UNSIGNED_INT_24_8, NULL);
@@ -190,11 +207,85 @@ static void gl_ensure(Res *t) {
 
 static GLuint surface_tex(Res *s) { if (s->parent) { gl_ensure(s->parent); return s->parent->tex; } gl_ensure(s); return s->tex; }
 
+void res_scale_factors(Res *s, float *sx, float *sy) {
+    Res *t = s->parent ? s->parent : s;
+    surface_tex(s);
+    *sx = t->tw == t->w ? 1 : (float)t->tw / t->w;
+    *sy = t->th == t->h ? 1 : (float)t->th / t->h;
+}
+
+/* The GL size of a surface's level. */
+static void gl_level_size(Res *s, uint32_t *w, uint32_t *h) {
+    Res *t = s->parent ? s->parent : s;
+    *w = t->tw >> s->level ? t->tw >> s->level : 1;
+    *h = t->th >> s->level ? t->th >> s->level : 1;
+}
+
+/* ---- copies ----
+ * Two scratch framebuffers (read and draw) made once, and a texture of the game's size that anything
+ * crossing between a render-scaled target and guest memory goes through. */
+static GLuint scratch_fbo[2];
+static void scratch_bind(int draw, GLuint tex, int level) {
+    if (!scratch_fbo[0]) glGenFramebuffers(2, scratch_fbo);
+    GLenum target = draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER;
+    gls_bind_framebuffer(target, scratch_fbo[draw]);
+    glFramebufferTexture2D(target, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, level);
+}
+static void blit(GLuint src, int sl, const int *sr, GLuint dst, int dl, const int *dr, GLenum filter) {  /* rects x0 y0 x1 y1 */
+    scratch_bind(0, src, sl);
+    scratch_bind(1, dst, dl);
+    gls_enable(GL_SCISSOR_TEST, 0);
+    glBlitFramebuffer(sr[0], sr[1], sr[2], sr[3], dr[0], dr[1], dr[2], dr[3], GL_COLOR_BUFFER_BIT, filter);
+}
+static GLuint tmp_tex;
+static uint32_t tmp_w, tmp_h;
+static GLuint tmp_texture(uint32_t w, uint32_t h) {
+    if (!tmp_tex || tmp_w != w || tmp_h != h) {
+        if (tmp_tex) delete_texture(tmp_tex);
+        glGenTextures(1, &tmp_tex);
+        gls_bind_texture(0, GL_TEXTURE_2D, tmp_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        tmp_w = w;
+        tmp_h = h;
+    }
+    return tmp_tex;
+}
+static void scale_rect(int *r, float sx, float sy) {
+    r[0] = scaled_px(r[0], sx); r[1] = scaled_px(r[1], sy); r[2] = scaled_px(r[2], sx); r[3] = scaled_px(r[3], sy);
+}
+
+/* Writes pixels (rows of row_len pixels) into a rectangle of a render target, scaling them in when the
+ * target is render-scaled. */
+static void upload_rt(Res *dst, int dx, int dy, int w, int h, const Fmt *f, const void *px, int row_len) {
+    GLuint tex = surface_tex(dst);
+    float sx, sy;
+    res_scale_factors(dst, &sx, &sy);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, row_len);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (sx == 1 && sy == 1) {
+        gls_bind_texture(0, GL_TEXTURE_2D, tex);
+        glTexSubImage2D(GL_TEXTURE_2D, dst->level, dx, dy, w, h, f->gfmt, f->type, px);
+    } else {
+        GLuint tmp = tmp_texture(dst->w, dst->h);
+        gls_bind_texture(0, GL_TEXTURE_2D, tmp);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, dx, dy, w, h, f->gfmt, f->type, px);
+        int sr[4] = {dx, dy, dx + w, dy + h}, dr[4] = {dx, dy, dx + w, dy + h};
+        scale_rect(dr, sx, sy);
+        blit(tmp, 0, sr, tex, dst->level, dr, GL_LINEAR);
+        res_bind_targets();
+    }
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+}
+
 /* Uploads one level from its guest copy. */
 static void upload_level(Res *t, Res *s) {
     const Fmt *f = fmt_info(s->fmt);
     GLenum target = face_target(t, s->face);
-    glBindTexture(t->kind == RES_CUBE ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D, t->tex);
+    s->dirty = 0;
+    if (t->is_rt && !f->block && s->fmt != FMT_P8) { upload_rt(s, 0, 0, s->w, s->h, f, GPTR(s->mem), 0); return; }
+    gls_bind_texture(0, t->kind == RES_CUBE ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D, t->tex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     if (f->block) glCompressedTexSubImage2D(target, s->level, 0, 0, s->w, s->h, f->ifmt, s->size, GPTR(s->mem));
     else if (s->fmt == FMT_P8) {
@@ -205,7 +296,6 @@ static void upload_level(Res *t, Res *s) {
         glTexSubImage2D(target, s->level, 0, 0, s->w, s->h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
         free(rgba);
     } else glTexSubImage2D(target, s->level, 0, 0, s->w, s->h, f->gfmt, f->type, GPTR(s->mem));
-    s->dirty = 0;
 }
 
 void res_upload_dirty(Res *t) {
@@ -224,29 +314,47 @@ static void mark_dirty(Res *s) {
     if (s->parent) s->parent->dirty = 1;
 }
 
+/* dev->fbo's attachments are only changed when the targets change: attaching and validating a
+ * framebuffer is not cheap, and the game switches targets several times a frame. */
+static struct { GLuint rt, ds; GLenum target; int rt_level, ds_level, valid; } attached;
+void res_targets_forget(void) { attached.valid = 0; }
+
 void res_bind_targets(void) {
     Res *rt = res_of(dev->rt), *ds = res_of(dev->ds);
-    glBindFramebuffer(GL_FRAMEBUFFER, dev->fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, rt->parent ? face_target(rt->parent, rt->face) : GL_TEXTURE_2D,
-                           surface_tex(rt), rt->level);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, ds ? surface_tex(ds) : 0,
-                           ds ? ds->level : 0);
+    GLuint rtex = surface_tex(rt), dtex = ds ? surface_tex(ds) : 0;
+    GLenum target = rt->parent ? face_target(rt->parent, rt->face) : GL_TEXTURE_2D;
+    int dlevel = ds ? ds->level : 0;
+    gls_bind_framebuffer(GL_FRAMEBUFFER, dev->fbo);
+    if (attached.valid && attached.rt == rtex && attached.target == target && attached.rt_level == rt->level &&
+        attached.ds == dtex && attached.ds_level == dlevel)
+        return;
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target, rtex, rt->level);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, dtex, dlevel);
+    attached.rt = rtex; attached.ds = dtex; attached.target = target; attached.rt_level = rt->level;
+    attached.ds_level = dlevel; attached.valid = 1;
     GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (st != GL_FRAMEBUFFER_COMPLETE) rt_log("framebuffer incomplete: %04X (rt %ux%u fmt %u)", st, rt->w, rt->h, rt->fmt);
 }
 
-/* Reads a render target back into the surface's guest copy, for locks of rendered images. */
+/* Reads a render target back into the surface's guest copy, for locks of rendered images. A render-scaled
+ * one is scaled to the game's size first. */
 static void readback(Res *s) {
     const Fmt *f = fmt_info(s->fmt);
     if (!s->mem) s->mem = galloc(s->size);
-    GLuint fb;
-    glGenFramebuffers(1, &fb);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fb);
-    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, surface_tex(s), s->level);
+    GLuint tex = surface_tex(s);
+    int level = s->level;
+    uint32_t tw, th;
+    gl_level_size(s, &tw, &th);
+    if (tw != s->w || th != s->h) {
+        int sr[4] = {0, 0, (int)tw, (int)th}, dr[4] = {0, 0, (int)s->w, (int)s->h};
+        tex = tmp_texture(s->w, s->h);
+        blit(surface_tex(s), s->level, sr, tex, 0, dr, GL_LINEAR);
+        level = 0;
+    }
+    scratch_bind(0, tex, level);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, s->w, s->h, f->gfmt, f->type, GPTR(s->mem));
-    glDeleteFramebuffers(1, &fb);
-    glBindFramebuffer(GL_FRAMEBUFFER, dev->fbo);
+    res_bind_targets();
 }
 
 /* The last presented frame. Direct3D's front buffer is what was last shown, not the back buffer the game has
@@ -257,34 +365,37 @@ static uint32_t front_w, front_h;
 void res_snapshot_front(void) {  /* called by Present with the back buffer bound for reading */
     Res *bb = res_of(dev->backbuffer);
     if (!bb) return;
-    if (!front_tex || front_w != bb->w || front_h != bb->h) {
-        if (front_tex) { glDeleteTextures(1, &front_tex); glDeleteFramebuffers(1, &front_fbo); }
-        front_w = bb->w;
-        front_h = bb->h;
+    if (!front_tex || front_w != bb->tw || front_h != bb->th) {
+        if (front_tex) { delete_texture(front_tex); glDeleteFramebuffers(1, &front_fbo); }
+        front_w = bb->tw;
+        front_h = bb->th;
         glGenTextures(1, &front_tex);
-        glBindTexture(GL_TEXTURE_2D, front_tex);
+        gls_bind_texture(0, GL_TEXTURE_2D, front_tex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, front_w, front_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glGenFramebuffers(1, &front_fbo);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, front_fbo);
+        gls_bind_framebuffer(GL_DRAW_FRAMEBUFFER, front_fbo);
         glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, front_tex, 0);
     }
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, front_fbo);
+    gls_bind_framebuffer(GL_DRAW_FRAMEBUFFER, front_fbo);
     glBlitFramebuffer(0, 0, front_w, front_h, 0, 0, front_w, front_h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    gls_bind_framebuffer(GL_DRAW_FRAMEBUFFER, 0);
 }
 
 /* GetFrontBuffer: the last presented image into an A8R8G8B8 image surface. */
 uint32_t res_read_front(uint32_t dst_o) {
     Res *src = res_of(dev->backbuffer), *dst = res_of(dst_o);
     if (!dst || !dst->mem || dst->fmt != FMT_A8R8G8B8) return D3DERR_INVALIDCALL;
-    GLuint fb;
-    glGenFramebuffers(1, &fb);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fb);
     /* the presented frame when there is one, else the back buffer */
-    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                           front_tex && front_w == src->w && front_h == src->h ? front_tex : surface_tex(src), 0);
+    GLuint tex = front_tex && front_w == src->tw && front_h == src->th ? front_tex : surface_tex(src);
+    if (src->tw != src->w || src->th != src->h) {  /* render-scaled: back to the game's size */
+        int sr[4] = {0, 0, (int)src->tw, (int)src->th}, dr[4] = {0, 0, (int)src->w, (int)src->h};
+        GLuint tmp = tmp_texture(src->w, src->h);
+        blit(tex, 0, sr, tmp, 0, dr, GL_LINEAR);
+        tex = tmp;
+    }
+    scratch_bind(0, tex, 0);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glPixelStorei(GL_PACK_ROW_LENGTH, dst->pitch / 4);
     GLenum fbst = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
@@ -300,7 +411,6 @@ uint32_t res_read_front(uint32_t dst_o) {
                n ? (unsigned)(sum[0] / n) : 0, n ? (unsigned)(sum[1] / n) : 0, n ? (unsigned)(sum[2] / n) : 0, px[0], px[1], px[2]);
     }
     glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-    glDeleteFramebuffers(1, &fb);
     for (uint32_t i = 0; i < dst->size; i += 4) *(uint8_t *)GPTR(dst->mem + i + 3) = 0xFF;
     mark_dirty(dst);
     res_bind_targets();
@@ -317,16 +427,14 @@ uint32_t res_copy_rects(uint32_t src_o, uint32_t rects, uint32_t n, uint32_t dst
         int32_t dx = points ? ((int32_t *)GPTR(points + 8 * i))[0] : r[0];
         int32_t dy = points ? ((int32_t *)GPTR(points + 8 * i))[1] : r[1];
         int w = r[2] - r[0], h = r[3] - r[1];
-        if (src->is_rt && dst->is_rt) {  /* GPU to GPU */
-            GLuint fb[2];
-            glGenFramebuffers(2, fb);
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, fb[0]);
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, surface_tex(src), src->level);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb[1]);
-            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, surface_tex(dst), dst->level);
-            glDisable(GL_SCISSOR_TEST);
-            glBlitFramebuffer(r[0], r[1], r[2], r[3], dx, dy, dx + w, dy + h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-            glDeleteFramebuffers(2, fb);
+        if (src->is_rt && dst->is_rt) {  /* GPU to GPU, each side in its own scale */
+            float ssx, ssy, dsx, dsy;
+            res_scale_factors(src, &ssx, &ssy);
+            res_scale_factors(dst, &dsx, &dsy);
+            int sr[4] = {r[0], r[1], r[2], r[3]}, dr[4] = {dx, dy, dx + w, dy + h};
+            scale_rect(sr, ssx, ssy);
+            scale_rect(dr, dsx, dsy);
+            blit(surface_tex(src), src->level, sr, surface_tex(dst), dst->level, dr, GL_NEAREST);
             res_bind_targets();
             continue;
         }
@@ -338,14 +446,8 @@ uint32_t res_copy_rects(uint32_t src_o, uint32_t rects, uint32_t n, uint32_t dst
                 memcpy(GPTR(dst->mem + (dy / div + y) * dst->pitch + dx / div * bpp),
                        GPTR(src->mem + (r[1] / div + y) * src->pitch + r[0] / div * bpp), w / div * bpp);
             mark_dirty(dst);
-        } else {         /* guest copy into a render target */
-            glBindTexture(GL_TEXTURE_2D, surface_tex(dst));
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, src->w);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexSubImage2D(GL_TEXTURE_2D, dst->level, dx, dy, w, h, f->gfmt, f->type,
-                            GPTR(src->mem + r[1] * src->pitch + r[0] * f->bpp));
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        }
+        } else           /* guest copy into a render target */
+            upload_rt(dst, dx, dy, w, h, f, GPTR(src->mem + r[1] * src->pitch + r[0] * f->bpp), src->w);
     }
     return 0;
 }
@@ -399,12 +501,7 @@ static uint32_t lock_surface(Res *s, uint32_t locked, uint32_t rect) {
 static uint32_t unlock_surface(Res *s) {
     if (!s) return D3DERR_INVALIDCALL;
     if (s->parent || !s->is_rt) mark_dirty(s);
-    else {  /* a locked render target: push the guest copy back */
-        const Fmt *f = fmt_info(s->fmt);
-        glBindTexture(GL_TEXTURE_2D, surface_tex(s));
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, s->w, s->h, f->gfmt, f->type, GPTR(s->mem));
-    }
+    else upload_rt(s, 0, 0, s->w, s->h, fmt_info(s->fmt), GPTR(s->mem), 0);  /* a locked render target: push the guest copy back */
     return 0;
 }
 

@@ -328,7 +328,12 @@ typedef struct Prog {
     Key key;
     GLuint id;
     GLint c, pc, wvp, wv, normalm, proj, texm, mat, amb, lt, ltcol, ltpos, ltdir, ltatt, ltspot, world;
-    GLint vp, halfpix, tfactor, fogcolor, fogparams, alpharef, viewproj, bumpenv;
+    GLint vp, halfpix, tfactor, fogcolor, fogparams, alpharef, viewproj, bumpenv, power, ltspec, ltamb;
+    /* What its uniforms hold, so a draw only re-sends what changed (GL keeps them per program). */
+    uint32_t vsc_gen, psc_gen, xform_gen, texm_gen, mat_gen, mat_xform_gen;
+    float last_vp[4];
+    uint32_t last_tfactor, last_fogcolor, last_fog[3], last_alpharef;
+    int fresh;
     struct Prog *next;
 } Prog;
 static Prog *progs[4096];
@@ -568,7 +573,8 @@ static Prog *build(const Key *k) {
     Prog *p = calloc(1, sizeof *p);
     p->key = *k;
     p->id = id;
-    glUseProgram(id);
+    p->fresh = 1;
+    gls_use_program(id);
     for (int s = 0; s < 8; s++) {
         char n[8];
         snprintf(n, sizeof n, "s%d", s);
@@ -579,7 +585,8 @@ static Prog *build(const Key *k) {
     U(texm, "uTexM"); U(mat, "uMat"); U(amb, "uAmbient"); U(ltcol, "uLtDiffuse"); U(ltpos, "uLtPos");
     U(ltdir, "uLtDir"); U(ltatt, "uLtAtt"); U(ltspot, "uLtSpot"); U(world, "uWorld"); U(viewproj, "uViewProj");
     U(vp, "uVp"); U(halfpix, "uHalfPix"); U(tfactor, "uTFactor"); U(fogcolor, "uFogColor");
-    U(fogparams, "uFogParams"); U(alpharef, "uAlphaRef");
+    U(fogparams, "uFogParams"); U(alpharef, "uAlphaRef"); U(power, "uPower"); U(ltspec, "uLtSpecular");
+    U(ltamb, "uLtAmbient");
 #undef U
     return p;
 }
@@ -775,33 +782,55 @@ void shader_bind_for_draw(int rhw, uint32_t vs, const int *present) {
 
     progcache_warmup();
     Prog *p = prog_get(&k, 1);
-    glUseProgram(p->id);
+    gls_use_program(p->id);
 
-    /* Uniforms */
-    glUniform2f(p->halfpix, 1.0f / dev->vp_w, -1.0f / dev->vp_h);
+    /* Uniforms, each only when the program does not hold the current value already. */
+    int fresh = p->fresh;
+    p->fresh = 0;
     float vp[4] = {dev->vp_x, dev->vp_y, dev->vp_w, dev->vp_h};
-    if (p->vp >= 0) glUniform4fv(p->vp, 1, vp);
-    if (p->c >= 0) {
-        if (v) for (int i = 0; i < 96; i++) if (v->const_set[i]) memcpy(dev->vsc[i], v->consts[i], 16);
-        glUniform4fv(p->c, 96, &dev->vsc[0][0]);
+    if (fresh || memcmp(p->last_vp, vp, sizeof vp)) {
+        memcpy(p->last_vp, vp, sizeof vp);
+        glUniform2f(p->halfpix, 1.0f / dev->vp_w, -1.0f / dev->vp_h);
+        if (p->vp >= 0) glUniform4fv(p->vp, 1, vp);
     }
-    if (p->pc >= 0) glUniform4fv(p->pc, 8, &dev->psc[0][0]);
-    if (p->wvp >= 0) {
-        float wv[16], wvp[16], vpm[16], nm[9];
-        mat_mul(wv, dev->world[0], dev->view);
-        mat_mul(wvp, wv, dev->proj);
-        mat_mul(vpm, dev->view, dev->proj);
+    if (p->c >= 0) {
+        /* The declaration's constants are loaded over the device's whenever either changes. */
+        static uint32_t merged_vs, merged_gen;
+        if (v && (merged_vs != vs || merged_gen != dev->vsc_gen)) {
+            for (int i = 0; i < 96; i++) if (v->const_set[i]) memcpy(dev->vsc[i], v->consts[i], 16);
+            merged_vs = vs;
+            merged_gen = ++dev->vsc_gen;
+        }
+        if (p->vsc_gen != dev->vsc_gen) { p->vsc_gen = dev->vsc_gen; glUniform4fv(p->c, 96, &dev->vsc[0][0]); }
+    }
+    if (p->pc >= 0 && p->psc_gen != dev->psc_gen) { p->psc_gen = dev->psc_gen; glUniform4fv(p->pc, 8, &dev->psc[0][0]); }
+    if (p->wvp >= 0 && p->xform_gen != dev->xform_gen) {
+        p->xform_gen = dev->xform_gen;
+        /* The products are shared by every program until a transform changes. */
+        static uint32_t prod_gen;
+        static float wv[16], wvp[16], vpm[16], nm[9];
+        if (prod_gen != dev->xform_gen) {
+            prod_gen = dev->xform_gen;
+            mat_mul(wv, dev->world[0], dev->view);
+            mat_mul(wvp, wv, dev->proj);
+            mat_mul(vpm, dev->view, dev->proj);
+            normal_matrix(nm, wv);
+        }
         glUniformMatrix4fv(p->wvp, 1, GL_FALSE, wvp);
         if (p->wv >= 0) glUniformMatrix4fv(p->wv, 1, GL_FALSE, wv);
         if (p->viewproj >= 0) glUniformMatrix4fv(p->viewproj, 1, GL_FALSE, vpm);
         if (p->world >= 0) glUniformMatrix4fv(p->world, 4, GL_FALSE, &dev->world[0][0]);
-        normal_matrix(nm, wv);
         if (p->normalm >= 0) glUniformMatrix3fv(p->normalm, 1, GL_FALSE, nm);
     }
-    if (p->texm >= 0) glUniformMatrix4fv(p->texm, 8, GL_FALSE, &dev->texm[0][0]);
-    if (p->mat >= 0) {
+    if (p->texm >= 0 && p->texm_gen != dev->texm_gen) {
+        p->texm_gen = dev->texm_gen;
+        glUniformMatrix4fv(p->texm, 8, GL_FALSE, &dev->texm[0][0]);
+    }
+    if (p->mat >= 0 && (p->mat_gen != dev->mat_gen || p->mat_xform_gen != dev->xform_gen)) {  /* lights live in view space */
+        p->mat_gen = dev->mat_gen;
+        p->mat_xform_gen = dev->xform_gen;
         glUniform4fv(p->mat, 4, dev->material);
-        glUniform1f(glGetUniformLocation(p->id, "uPower"), dev->material[16]);
+        if (p->power >= 0) glUniform1f(p->power, dev->material[16]);
         float amb[4];
         color4(amb, rs[139]);
         glUniform4fv(p->amb, 1, amb);
@@ -809,7 +838,7 @@ void shader_bind_for_draw(int rhw, uint32_t vs, const int *present) {
         for (int i = 0; i < 8; i++) {
             Light *l = &dev->light[i];
             memcpy(dif[i], l->diffuse, 16); memcpy(spe[i], l->specular, 16); memcpy(ambl[i], l->ambient, 16);
-            const float *V = dev->view;  /* lights live in view space */
+            const float *V = dev->view;
             for (int c = 0; c < 3; c++) {
                 pos[i][c] = l->pos[0] * V[c] + l->pos[1] * V[4 + c] + l->pos[2] * V[8 + c] + V[12 + c];
                 dir[i][c] = l->dir[0] * V[c] + l->dir[1] * V[4 + c] + l->dir[2] * V[8 + c];
@@ -821,40 +850,62 @@ void shader_bind_for_draw(int rhw, uint32_t vs, const int *present) {
             spot[i][0] = cosf(l->theta / 2); spot[i][1] = cosf(l->phi / 2); spot[i][2] = l->falloff; spot[i][3] = 0;
         }
         glUniform4fv(p->ltcol, 8, &dif[0][0]);
-        glUniform4fv(glGetUniformLocation(p->id, "uLtSpecular"), 8, &spe[0][0]);
-        glUniform4fv(glGetUniformLocation(p->id, "uLtAmbient"), 8, &ambl[0][0]);
+        if (p->ltspec >= 0) glUniform4fv(p->ltspec, 8, &spe[0][0]);
+        if (p->ltamb >= 0) glUniform4fv(p->ltamb, 8, &ambl[0][0]);
         glUniform4fv(p->ltpos, 8, &pos[0][0]);
         glUniform4fv(p->ltdir, 8, &dir[0][0]);
         glUniform4fv(p->ltatt, 8, &att[0][0]);
         glUniform4fv(p->ltspot, 8, &spot[0][0]);
     }
     float c4[4];
-    color4(c4, rs[60]);
-    if (p->tfactor >= 0) glUniform4fv(p->tfactor, 1, c4);
-    color4(c4, rs[34]);
-    if (p->fogcolor >= 0) glUniform4fv(p->fogcolor, 1, c4);
-    float fp[4] = {rsf(36), rsf(37), rsf(38), 0};
-    if (p->fogparams >= 0) glUniform4fv(p->fogparams, 1, fp);
-    if (p->alpharef >= 0) glUniform1f(p->alpharef, (float)(rs[24] & 255));
+    if (p->tfactor >= 0 && (fresh || p->last_tfactor != rs[60])) {
+        p->last_tfactor = rs[60];
+        color4(c4, rs[60]);
+        glUniform4fv(p->tfactor, 1, c4);
+    }
+    if (p->fogcolor >= 0 && (fresh || p->last_fogcolor != rs[34])) {
+        p->last_fogcolor = rs[34];
+        color4(c4, rs[34]);
+        glUniform4fv(p->fogcolor, 1, c4);
+    }
+    if (p->fogparams >= 0 && (fresh || memcmp(p->last_fog, &rs[36], 12))) {
+        memcpy(p->last_fog, &rs[36], 12);
+        float fp[4] = {rsf(36), rsf(37), rsf(38), 0};
+        glUniform4fv(p->fogparams, 1, fp);
+    }
+    if (p->alpharef >= 0 && (fresh || p->last_alpharef != (rs[24] & 255))) {
+        p->last_alpharef = rs[24] & 255;
+        glUniform1f(p->alpharef, (float)(rs[24] & 255));
+    }
 
-    /* Samplers follow the texture stage states. */
+    /* Samplers follow the texture stage states; each is bound to its unit once and changed when they do. */
     static GLuint samplers[8];
-    if (!samplers[0]) glGenSamplers(8, samplers);
+    static uint32_t last[8][7];  /* wrap s, t, r, mag, min, mip, border color */
+    if (!samplers[0]) {
+        glGenSamplers(8, samplers);
+        memset(last, 0xFF, sizeof last);
+        for (int s = 0; s < 8; s++) glBindSampler(s, samplers[s]);
+    }
     for (int s = 0; s < 8; s++) {
-        uint32_t *t = dev->tss[s];
+        uint32_t *t = dev->tss[s], cur[7] = {t[13], t[14], t[25], t[16], t[17], t[18], t[15]};
+        if (!memcmp(last[s], cur, sizeof cur)) continue;
         static const GLint wrap[6] = {GL_REPEAT, GL_REPEAT, GL_MIRRORED_REPEAT, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_BORDER, GL_MIRROR_CLAMP_TO_EDGE};
-        glSamplerParameteri(samplers[s], GL_TEXTURE_WRAP_S, wrap[t[13] < 6 ? t[13] : 1]);
-        glSamplerParameteri(samplers[s], GL_TEXTURE_WRAP_T, wrap[t[14] < 6 ? t[14] : 1]);
-        glSamplerParameteri(samplers[s], GL_TEXTURE_WRAP_R, wrap[t[25] < 6 ? t[25] : 1]);
+        if (last[s][0] != cur[0]) glSamplerParameteri(samplers[s], GL_TEXTURE_WRAP_S, wrap[t[13] < 6 ? t[13] : 1]);
+        if (last[s][1] != cur[1]) glSamplerParameteri(samplers[s], GL_TEXTURE_WRAP_T, wrap[t[14] < 6 ? t[14] : 1]);
+        if (last[s][2] != cur[2]) glSamplerParameteri(samplers[s], GL_TEXTURE_WRAP_R, wrap[t[25] < 6 ? t[25] : 1]);
         int lin_mag = t[16] >= 2, lin_min = t[17] >= 2, mip = t[18];
-        glSamplerParameteri(samplers[s], GL_TEXTURE_MAG_FILTER, lin_mag ? GL_LINEAR : GL_NEAREST);
-        GLint minf = mip == 0 ? (lin_min ? GL_LINEAR : GL_NEAREST)
-                   : mip == 1 ? (lin_min ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST)
-                              : (lin_min ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_LINEAR);
-        glSamplerParameteri(samplers[s], GL_TEXTURE_MIN_FILTER, minf);
-        float bc[4];
-        color4(bc, t[15]);
-        glSamplerParameterfv(samplers[s], GL_TEXTURE_BORDER_COLOR, bc);
-        glBindSampler(s, samplers[s]);
+        if (last[s][3] != cur[3]) glSamplerParameteri(samplers[s], GL_TEXTURE_MAG_FILTER, lin_mag ? GL_LINEAR : GL_NEAREST);
+        if (last[s][4] != cur[4] || last[s][5] != cur[5]) {
+            GLint minf = mip == 0 ? (lin_min ? GL_LINEAR : GL_NEAREST)
+                       : mip == 1 ? (lin_min ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST)
+                                  : (lin_min ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_LINEAR);
+            glSamplerParameteri(samplers[s], GL_TEXTURE_MIN_FILTER, minf);
+        }
+        if (last[s][6] != cur[6]) {
+            float bc[4];
+            color4(bc, t[15]);
+            glSamplerParameterfv(samplers[s], GL_TEXTURE_BORDER_COLOR, bc);
+        }
+        memcpy(last[s], cur, sizeof cur);
     }
 }

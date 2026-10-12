@@ -24,6 +24,8 @@ typedef struct Res {
     uint32_t obj, refs;
     uint32_t fmt, usage, pool, w, h, levels;
     GLuint tex;                  /* textures; surfaces that are render or depth targets own one too */
+    uint32_t tw, th;             /* the GL texture's level 0 size: w, h unless the surface is render-scaled */
+    float tex_scale;             /* rt_scale the GL texture was made for (render-scaled targets only) */
     uint32_t surf[6][14];        /* textures: surface objects per face and level */
     struct Res *parent;          /* surfaces: the texture they belong to, or NULL */
     int level, face;
@@ -36,6 +38,18 @@ typedef struct Res {
 Res *res_of(uint32_t obj);       /* NULL for a NULL object */
 void res_addref(uint32_t obj);
 void res_release(uint32_t obj);
+
+/* ---- render scale ----
+ * Screen-sized render and depth targets are drawn at rt_scale times the game's resolution (the Switch
+ * renders 480 lines in handheld mode and 720 docked, whatever the game lays itself out for) and the
+ * result is scaled to the screen at Present. The game never sees it: viewports, scissors, clear and copy
+ * rectangles are scaled on the way to GL, and anything that crosses into guest memory (locks,
+ * GetFrontBuffer, CopyRects to an image surface) goes through a texture of the game's size. */
+extern float rt_scale;           /* 1: no scaling */
+int res_scaled(const Res *t);    /* a texture or standalone surface drawn at rt_scale */
+/* x and y factors from game pixels to the GL texels of surface s (1, 1 unless scaled). Creates the GL texture. */
+void res_scale_factors(Res *s, float *sx, float *sy);
+static inline int scaled_px(float v, float f) { return (int)(v * f + (v < 0 ? -0.5f : 0.5f)); }
 
 /* Texture stage, render state and transform indices used by the shaders. */
 #define RS_COUNT 256
@@ -65,16 +79,35 @@ typedef struct Dev {
     GLuint fbo, vao, stream_buf, index_buf;
     uint32_t palette[256][256];
     uint32_t cur_palette;
+    /* Generations: bumped when the state they cover changes, so a program's uniforms are only re-sent
+     * when they are stale (d3d8_shader.c). */
+    uint32_t vsc_gen, psc_gen, xform_gen, texm_gen, mat_gen;
 } Dev;
 
 extern Dev *dev;
+
+/* ---- cached GL state (d3d8.c) ----
+ * Every GL call a draw needs goes through these, which skip the ones that change nothing: on the
+ * Switch's mesa each call costs real CPU time, and a draw used to make over a hundred of them. */
+void gls_enable(GLenum cap, int on);
+void gls_bind_texture(int unit, GLenum target, GLuint tex);   /* leaves unit active */
+void gls_bind_buffer(GLenum target, GLuint buf);
+void gls_bind_framebuffer(GLenum target, GLuint fbo);
+void gls_color_mask(int r, int g, int b, int a);
+void gls_depth_mask(int on);
+void gls_stencil_mask(uint32_t m);
+void gls_scissor(int x, int y, int w, int h);
+void gls_use_program(GLuint id);
+void gls_texture_deleted(GLuint tex);   /* GL unbinds a deleted name everywhere; so does the cache */
+void gls_buffer_deleted(GLuint buf);
 
 /* d3d8_res.c */
 uint32_t res_texture(uint32_t w, uint32_t h, uint32_t levels, uint32_t usage, uint32_t fmt, uint32_t pool, int cube);
 uint32_t res_surface(uint32_t w, uint32_t h, uint32_t fmt, int is_rt, int is_depth);
 uint32_t res_buffer(int kind, uint32_t size, uint32_t usage, uint32_t fmt_or_fvf, uint32_t pool);
 void res_upload_dirty(Res *t);   /* pushes locked texture levels to GL before a draw samples them */
-void res_bind_targets(void);     /* attaches dev->rt / dev->ds to the FBO */
+void res_bind_targets(void);     /* attaches dev->rt / dev->ds to the FBO (only when they changed) */
+void res_targets_forget(void);   /* after dev->fbo's attachments were changed behind res_bind_targets's back */
 /* CopyRects: surface rectangles to another surface (guest copies, then GL). */
 uint32_t res_copy_rects(uint32_t src, uint32_t rects, uint32_t n, uint32_t dst, uint32_t points);
 void res_snapshot_front(void);  /* keeps the presented frame for GetFrontBuffer */
