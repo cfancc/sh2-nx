@@ -164,8 +164,12 @@ WINAPI(BinkWait, "_BinkWait@4", 1) {
     Movie *m = movie(ARG(0));
     uint32_t b = ARG(0), rate = MEM32(b + 20), div = MEM32(b + 24);
     if (!m || !m->t0 || !rate || m->paused_at) return m && m->paused_at;
-    Uint64 due = m->t0 + (Uint64)(MEM32(b + 12) - 1) * 1000 * div / rate;
-    return SDL_GetTicks64() < due;
+    Uint64 due = m->t0 + (Uint64)(MEM32(b + 12) - 1) * 1000 * div / rate, now = SDL_GetTicks64();
+    if (now >= due) return 0;
+    /* The movie loop spins on `while (BinkWait(b));` (0x43DE38), which the 30 Hz limiter used to keep short
+     * before FixFMVSpeed: sleep until the frame is due (a few ms at most) instead of burning a core. */
+    SDL_Delay(due - now < 4 ? (Uint32)(due - now) : 4);
+    return 1;
 }
 
 WINAPI(BinkPause, "_BinkPause@8", 2) {
