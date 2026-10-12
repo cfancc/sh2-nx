@@ -77,4 +77,6 @@ void rt_thread_init_main(uint32_t stack_size);
 void rt_spawn(void (*fn)(void *), void *arg, uint32_t stack_size);
 /* Maps a guest path (backslashes, drive letters, any case) to a host path under rt_game_dir. */
 const char *rt_path(const char *guest, char *out, size_t n);
+/* fread into guest memory; every host read the guest asks for goes through it (see kernel32.c). */
+size_t rt_fread(uint32_t va, size_t n, FILE *f);
 void rt_set_last_error(uint32_t e);

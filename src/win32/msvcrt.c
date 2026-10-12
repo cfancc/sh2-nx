@@ -114,7 +114,9 @@ CDECL(c_fclose, "fclose") {
     gfree(ARG(0));
     return 0;
 }
-CDECL(c_fread, "fread") { return sync_flags(ARG(3), fread(GPTR(ARG(0)), ARG(1), ARG(2), gfile(ARG(3)))); }
+CDECL(c_fread, "fread") {
+    return sync_flags(ARG(3), ARG(1) ? rt_fread(ARG(0), (size_t)ARG(1) * ARG(2), gfile(ARG(3))) / ARG(1) : 0);
+}
 CDECL(c_fwrite, "fwrite") { return sync_flags(ARG(3), fwrite(GPTR(ARG(0)), ARG(1), ARG(2), gfile(ARG(3)))); }
 CDECL(c_fseek, "fseek") { return sync_flags(ARG(0), fseek(gfile(ARG(0)), (int32_t)ARG(1), ARG(2))); }
 CDECL(c_ftell, "ftell") { return ftell(gfile(ARG(0))); }

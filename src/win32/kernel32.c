@@ -625,6 +625,25 @@ WINAPI(CreateFileW, "CreateFileW", 7) {
     return open_file(s, ARG(1), ARG(4));
 }
 
+/* Reads into guest memory go through a host buffer. On the Switch, newlib passes the caller's buffer of a
+ * large fread straight to the FS service, and Horizon unmaps an IPC buffer's pages from the whole process
+ * until the call returns:
+ * the game's loader thread reads a model into the texture buffer 0x04000000 while the main thread checks
+ * the model header there every frame (crash at the coin cabinet, viewed twice). On Windows the other
+ * thread just reads what is there. */
+size_t rt_fread(uint32_t va, size_t n, FILE *f) {
+    enum { CHUNK = 1u << 20 };
+    char *buf = n ? malloc(n < CHUNK ? n : CHUNK) : NULL;
+    size_t done = 0, got;
+    if (n && !buf) rt_fatal("out of memory reading %zu bytes", n);
+    while (done < n && (got = fread(buf, 1, n - done < CHUNK ? n - done : CHUNK, f))) {
+        memcpy(GPTR(va + done), buf, got);
+        done += got;
+    }
+    free(buf);
+    return done;
+}
+
 /* OVERLAPPED: Internal, InternalHigh, Offset, OffsetHigh, hEvent. Reads complete before returning. */
 static uint32_t file_io(int write) {
     Obj *o = obj(ARG(0));
@@ -644,7 +663,7 @@ static uint32_t file_io(int write) {
         size_t want = ARG(2);
         if (at >= end) want = 0;
         else if ((uint64_t)(end - at) < want) want = (size_t)(end - at);
-        n = want ? fread(GPTR(ARG(1)), 1, want, o->f) : 0;
+        n = rt_fread(ARG(1), want, o->f);
     }
     if (ARG(2) >= 0x400 && ARG(2) <= 0x4800 && ARG(2) % 0x400 == 0)  /* save files */
         rt_log("save: %s handle %X buf %08X size %u at %lld -> %u%s", write ? "WriteFile" : "ReadFile", ARG(0), ARG(1), ARG(2), (long long)at, (unsigned)n, ov ? " overlapped" : "");
@@ -820,7 +839,7 @@ WINAPI(MapViewOfFile, "MapViewOfFile", 5) {
     uint32_t n = ARG(4) ? ARG(4) : (uint32_t)(st.st_size - off);
     uint32_t va = galloc(n);
     fseeko(f->f, off, SEEK_SET);
-    if (fread(GPTR(va), 1, n, f->f) != n) rt_log("MapViewOfFile: short read");
+    if (rt_fread(va, n, f->f) != n) rt_log("MapViewOfFile: short read");
     return va;
 }
 WINAPI(UnmapViewOfFile, "UnmapViewOfFile", 1) { gfree(ARG(0)); return 1; }
