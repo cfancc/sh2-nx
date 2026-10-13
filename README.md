@@ -7,7 +7,7 @@
 
 <p align=center><a href="https://discord.gg/H9yb3hSkvf"><img src="https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?logo=discord&logoColor=white" alt="Discord"></a></p>
 
-<p align=center><b>v0.64</b></p>
+<p align=center><b>v0.65</b></p>
 
 A native Nintendo Switch port of the PC version of **Silent Hill 2** (Director's Cut / Restless Dreams), with
 support for the packs of **[Silent Hill 2: Enhanced Edition](https://enhanced.townofsilenthill.com/SH2/)**.
@@ -27,13 +27,28 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
 - **Widescreen**: 16:9 at 1280x720 by default, 1920x1080 for docked play, or the original 4:3 (ThirteenAG's
   WidescreenFix, ported).
 - **Enhanced Edition packs**: HD textures and maps, the EE title and save screens, the restored music, voices and sound
-  effects, EE menus and fonts. The FMV pack is not supported yet.
+  effects, EE menus and fonts. The FMV pack plays at speed but drops frames on the Switch (`movie=1`).
 - **Enhanced Edition fixes**: search camera on the right stick, movement on the d-pad, pause menu fix, vibration
   fixes.
 - **Controller**: SH2EE's button layout with Nintendo's A/B, HD rumble following the in-game Vibration option.
 - **Saving and loading**, movies with synced audio, every menu.
 - **Shader cache**: shaders are compiled once and kept on the SD card, so areas only stutter the first time.
 - Also builds for Linux (x86-64), which is where most of the debugging happens.
+
+## What's new in v0.65
+
+- **Crash at the coin cabinet** fixed (Blue Creek Apartments, room 105: examining the coin box a second time closed
+  the game, on the Switch only): files are now read through a buffer of the port's own instead of straight into the
+  game's memory, which the Switch takes away from the game while it reads.
+- **Cutscene fades cover the whole screen** in widescreen (e.g. Eddie in the bowling alley faded only the 4:3 middle).
+- **Faster rendering**: far fewer OpenGL calls per frame, and the screen-sized render targets are drawn with 480 lines
+  in handheld mode and 720 docked, then scaled to the screen (`handheld=` / `docked=` in `sh2e.ini`; `0` draws them
+  at the game's resolution).
+- **Movies**: the movie loop no longer waits for the 30 Hz limiter and subtitles follow the video's frame rate (EE
+  `FixFMVSpeed`, `FmvSubtitlesSyncFix`), so the FMV pack's 60 fps videos play at speed (`movie=1`; the Switch drops
+  frames decoding them).
+- **Experimental 60 fps**: `fps=60` in `sh2e.ini` turns on the Enhanced Edition's `SetSixtyFPS` with its
+  frame-timing fixes. Off by default: the Switch can't hold 60 everywhere.
 
 ## What's new in v0.64
 
