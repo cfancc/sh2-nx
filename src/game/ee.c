@@ -396,14 +396,19 @@ void sub_00401250(void) {  /* player icon x ([ebx]) * aspect; mov eax, [map id] 
     g_eax = MEM32(MAP_ID);
     g_esp += 4;
 }
-void sub_00401258(void) {  /* fadd [esp+0xC]; fadd [esp+0x18]; a map page is wider */
+/* These two sit in the full-screen sprite path of 0x49EFE0 (esi = the sprite). A sprite without a texture
+ * is a colour fill, e.g. a cutscene's fade to black: it covers the whole screen, not the 4:3 area. */
+static int32_t fill_pad(void) { return MEM32(g_esi) ? 0 : ((int32_t)ee_res_w - (int32_t)MEM32(WIDTH_VAR)) / 2; }
+void sub_00401258(void) {  /* fadd [esp+0xC]; fadd [esp+0x18]; a map page or a fill is wider */
     ST(0) = (float)(ST(0) + ws_getf(ws_esp() + 0xC));
     ST(0) = (float)(ST(0) + ws_getf(ws_esp() + 0x18));
     if (map_texture()) ST(0) = (float)(ST(0) + map_width);
+    else ST(0) = (float)(ST(0) - 2 * fill_pad());
     g_esp += 4;
 }
-void sub_00401260(void) {  /* mov eax, [height]; a map page's screen x (edx) moves with the widening */
+void sub_00401260(void) {  /* mov eax, [height]; a map page's or a fill's screen x (edx) moves with the widening */
     if (map_texture()) g_edx = (uint32_t)(int32_t)lrint((map_res_x - map_res_x43) / 2.0 + (int32_t)g_edx);
+    else g_edx += fill_pad();
     g_eax = MEM32(0x00A33484u);
     g_esp += 4;
 }
