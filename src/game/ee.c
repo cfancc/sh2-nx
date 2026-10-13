@@ -242,7 +242,7 @@ static float ws_getf(uint32_t va) { float v; memcpy(&v, GPTR(va), 4); return v; 
 static float ws_text(void) { return ws_getf(WS_VAR(V_TEXT)); }
 
 static int sfx_flashlight = 1, sfx_save_load = 1;  /* sh2e.ini FlashlightToggleSFX / PreserveSoundsOnLoad */
-static int ee_fps = 60;                            /* sh2e.ini fps=60 (EE SetSixtyFPS) or 30, the original */
+static int ee_fps = 30;                            /* sh2e.ini fps=60 (EE SetSixtyFPS) or 30, the original */
 static void ee_widescreen_init(void) {
     uint32_t w = 1280, h = 720;
     FILE *f = fopen("sh2e.ini", "r");

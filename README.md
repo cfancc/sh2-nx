@@ -161,7 +161,7 @@ button is in the same place as on an Xbox pad with the Enhanced Edition. Remap t
 | `movie=0` | the FMV pack (`sh2e/movie`): its 60 fps videos now play at speed, but 1080p60 Bink decoding is heavy for the Switch, so it drops frames; try `movie=1` |
 | `resolution=1280x720` | the default; `1920x1080` for docked play, `960x720` for the original 4:3 |
 | `handheld=480`, `docked=720` | the defaults: how many lines the screen-sized render targets are drawn with in each mode, then scaled to the screen (the game is still laid out for `resolution`); `0` draws them at the game's resolution. Docking or undocking switches at the next frame |
-| `fps=30` | the original 30 fps. The default is `60`: the Enhanced Edition's `SetSixtyFPS`, with its fixes for what the game timed by frames (see below) |
+| `fps=60` | the Enhanced Edition's `SetSixtyFPS`, with its fixes for what the game timed by frames (see below). The default is `30`, the original |
 | `FlashlightToggleSFX=0` | no click when the flashlight is switched (on by default when `sh2e/sound/extra` has the sounds) |
 | `PreserveSoundsOnLoad=0` | the game's own load and save sounds, which loading cuts off (by default the Enhanced Edition's play through) |
 | `cores=1` | every game thread on one core, a fallback if the music ever loops again |
