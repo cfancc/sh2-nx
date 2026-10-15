@@ -7,7 +7,7 @@
 
 <p align=center><a href="https://discord.gg/H9yb3hSkvf"><img src="https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?logo=discord&logoColor=white" alt="Discord"></a></p>
 
-<p align=center><b>v0.66</b></p>
+<p align=center><b>v1.00</b></p>
 
 A native Nintendo Switch port of the PC version of **Silent Hill 2** (Director's Cut / Restless Dreams), with
 support for the packs of **[Silent Hill 2: Enhanced Edition](https://enhanced.townofsilenthill.com/SH2/)**.
@@ -36,75 +36,6 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
   original 30, since the Switch can't hold 60 everywhere yet ([60 fps](#60-fps-experimental)).
 - **Shader cache**: shaders are compiled once and kept on the SD card, so areas only stutter the first time.
 - Also builds for Linux (x86-64), which is where most of the debugging happens.
-
-## What's new in v0.66
-
-- **Enhanced Edition movies** (the FMV pack, `movie=1`) now work all the way through. After a movie the game no
-  longer stays on a black screen (with the sound still playing) until the cutscene is skipped: when the Switch fell
-  behind decoding the 1080p60 videos, the frames it dropped to keep up could skip the very frame the game waits for
-  to end the movie. Reported by GloriousCheese (e.g. James at the mirror, right after New Game).
-- **Movie subtitles** keep up with those movies: they followed how many frames the game had drawn, not where the
-  video was, so with dropped frames they came late and most never showed.
-- `movie=1` is on in the example `sh2e.ini`, and `tools/make_sd.py` now copies `sh2e/movie` (about 1.9 GB).
-
-## Previous updates
-
-- **Crash at the coin cabinet** fixed (Blue Creek Apartments, room 105: examining the coin box a second time closed
-  the game, on the Switch only): files are now read through a buffer of the port's own instead of straight into the
-  game's memory, which the Switch takes away from the game while it reads.
-- **Cutscene fades cover the whole screen** in widescreen (e.g. Eddie in the bowling alley faded only the 4:3 middle).
-- **Faster rendering**: far fewer OpenGL calls per frame, and the screen-sized render targets are drawn with 480 lines
-  in handheld mode and 720 docked, then scaled to the screen (`handheld=` / `docked=` in `sh2e.ini`; `0` draws them
-  at the game's resolution).
-- **Movies**: the movie loop no longer waits for the 30 Hz limiter and subtitles follow the video's frame rate (EE
-  `FixFMVSpeed`, `FmvSubtitlesSyncFix`), so the FMV pack's 60 fps videos play at speed (`movie=1`; the Switch drops
-  frames decoding them).
-- **Experimental 60 fps**: `fps=60` in `sh2e.ini` turns on the Enhanced Edition's `SetSixtyFPS` with its
-  frame-timing fixes. Off by default: the Switch can't hold 60 everywhere.
-
-
-- **Enhanced Edition extra sounds**: a click when the flashlight is switched, and load and save sounds that play
-  through the loading screen instead of being cut off (`FlashlightToggleSFX` and `PreserveSoundsOnLoad` in
-  `sh2e.ini`, on by default with the sounds in `sh2e/sound/extra`). Thanks to GloriousCheese for the request.
-
-- **Black rooms in Pete's Bowl-O-Rama** fixed (after the Eddie and Laura cutscene, every room drew black): a function
-  the room lighting jumps to had been missed by the recompiler. Thanks to GloriousCheese for the report and the save.
-
-- **Crash in Blue Creek Apartments** fixed (using the save point, or leaving the room past the fire exit, closed the
-  game): part of an effect's update code had been missed by the recompiler. Thanks to Jlancaster94 for the report and
-  the save.
-- With `log=1`, `sh2.log` names every file the game could not open, which pins down "Files are missing" errors.
-
-- **Crash when firing a gun** fixed ("indirect call to untranslated address 004F12C0"): a function the game calls on
-  every shot had been missed by the recompiler. Thanks to GloriousCheese for the report.
-
-
-- **Map**: James's arrow is back and map markings no longer spill past the map into the side bars. EE's map code
-  is ported, so the map uses the Enhanced Edition's HD map pages and fills the wide screen (the `hdmaps` setting is
-  gone).
-- **Save and load screens**: the giant names of the saves no longer cover James's face.
-
-
-Everything since the first release:
-
-- **Enhanced Edition support** ([r4lix/sh2-nx](https://github.com/r4lix/sh2-nx)): the `sh2e/` packs with a switch per
-  folder (`sh2e.ini`), HD textures (EE's texture buffers), the audio pack's 89 MB sound effect bank, the EE title
-  and save screen art, the title menu per language, and EE's code patches applied to the exe before recompiling
-  (`tools/patch_exe.py`, `src/game/ee.c`).
-- **Widescreen** with a `resolution` setting; cutscene letterboxing hidden on a wide screen (r4lix).
-- **Controls**: SH2EE's layout and default bindings (no `keyconf.dat` needed), Nintendo's A/B on the Switch, HD rumble
-  (r4lix), EE's controller tweaks (r4lix).
-- **Crash fixed** when opening Options with a controller connected (always the case on the Switch).
-- **Music going silent, starting late or looping** (for example after skipping a cutscene) fixed: lost `PulseEvent`
-  pulses starved CRI's audio thread, and a resume that came before its pause parked a thread for good.
-- **Saves**: "damaged folders" fixed (reads at the end of a file zeroed the buffer on the Switch), save times in
-  local time, real file times (r4lix).
-- **Grey transitions and save thumbnails** fixed: the front buffer is the last presented frame (r4lix).
-- **Stutter** when areas or shaders load: shader program cache in `sh2-progs.bin` (r4lix).
-- **Lifter**: MSVC `switch` chains no longer lose a branch (r4lix).
-- **CPU**: the game's frame limiters no longer keep two cores at 100%.
-- A heap quarantine against a use-after-free in the game, no power-of-two texture rounding, hidden mouse cursor,
-  no safe mode after HOME (r4lix).
 
 ## How to install
 
