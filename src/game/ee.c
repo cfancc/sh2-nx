@@ -493,12 +493,15 @@ void sub_004A5090(void) {
 }
 
 /* FMV subtitles (EE FmvSubtitlesSyncFix): the subtitle frame index in esi is timed for the original
- * 29.97 fps videos; with a video at another rate (the FMV pack's 60 fps) it follows that rate. */
+ * 29.97 fps videos; with a video at another rate (the FMV pack's 60 fps) it follows that rate. esi is
+ * the movie loop's pass count, which falls behind the video when bink.c drops late frames (Switch), so
+ * the frame actually shown (LastFrameNum, +0x10) is used instead. */
 #define BINK_HANDLE 0x00932740u   /* the game's BINK * (bink.c's BinkOpen: FrameRate +0x14, FrameRateDiv +0x18) */
 extern void sub_0043DC50_gen(void);
 void sub_0043DC50(void) {
     uint32_t b = MEM32(BINK_HANDLE);
     int32_t rate = b ? SMEM32(b + 0x14) : 0, div = b ? SMEM32(b + 0x18) : 0;
+    if (b && MEM32(b + 0x10)) g_esi = MEM32(b + 0x10);
     if (rate > 0 && div > 0) g_esi = (uint32_t)(int32_t)lrint((int32_t)g_esi * (29.97 / ((double)rate / div)));
     sub_0043DC50_gen();
 }

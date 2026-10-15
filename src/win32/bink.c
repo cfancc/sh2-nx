@@ -117,6 +117,7 @@ WINAPI(BinkOpen, "_BinkOpen@8", 2) {
     MEM32(m->guest + 4) = h[6];   /* Height */
     MEM32(m->guest + 8) = h[2];   /* Frames */
     MEM32(m->guest + 12) = 1;     /* FrameNum, 1-based */
+    MEM32(m->guest + 16) = 0;     /* LastFrameNum: none shown yet (the FMV subtitles follow it, ee.c) */
     MEM32(m->guest + 20) = h[7];  /* FrameRate */
     MEM32(m->guest + 24) = h[8];  /* FrameRateDiv */
     ds_track_clear();
