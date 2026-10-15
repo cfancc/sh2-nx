@@ -47,7 +47,7 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
   video was, so with dropped frames they came late and most never showed.
 - `movie=1` is on in the example `sh2e.ini`, and `tools/make_sd.py` now copies `sh2e/movie` (about 1.9 GB).
 
-## What's new in v0.65
+## Previous updates
 
 - **Crash at the coin cabinet** fixed (Blue Creek Apartments, room 105: examining the coin box a second time closed
   the game, on the Switch only): files are now read through a buffer of the port's own instead of straight into the
@@ -62,37 +62,28 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
 - **Experimental 60 fps**: `fps=60` in `sh2e.ini` turns on the Enhanced Edition's `SetSixtyFPS` with its
   frame-timing fixes. Off by default: the Switch can't hold 60 everywhere.
 
-## What's new in v0.64
 
 - **Enhanced Edition extra sounds**: a click when the flashlight is switched, and load and save sounds that play
   through the loading screen instead of being cut off (`FlashlightToggleSFX` and `PreserveSoundsOnLoad` in
   `sh2e.ini`, on by default with the sounds in `sh2e/sound/extra`). Thanks to GloriousCheese for the request.
 
-## What's new in v0.63
-
 - **Black rooms in Pete's Bowl-O-Rama** fixed (after the Eddie and Laura cutscene, every room drew black): a function
   the room lighting jumps to had been missed by the recompiler. Thanks to GloriousCheese for the report and the save.
-
-## What's new in v0.62
 
 - **Crash in Blue Creek Apartments** fixed (using the save point, or leaving the room past the fire exit, closed the
   game): part of an effect's update code had been missed by the recompiler. Thanks to Jlancaster94 for the report and
   the save.
 - With `log=1`, `sh2.log` names every file the game could not open, which pins down "Files are missing" errors.
 
-## What's new in v0.61
-
 - **Crash when firing a gun** fixed ("indirect call to untranslated address 004F12C0"): a function the game calls on
   every shot had been missed by the recompiler. Thanks to GloriousCheese for the report.
 
-## What's new in v0.60
 
 - **Map**: James's arrow is back and map markings no longer spill past the map into the side bars. EE's map code
   is ported, so the map uses the Enhanced Edition's HD map pages and fills the wide screen (the `hdmaps` setting is
   gone).
 - **Save and load screens**: the giant names of the saves no longer cover James's face.
 
-## What's new in v0.55
 
 Everything since the first release:
 
