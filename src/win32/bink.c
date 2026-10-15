@@ -146,7 +146,8 @@ WINAPI(BinkDoFrame, "_BinkDoFrame@4", 1) {
     uint32_t rate = MEM32(b + 20), div = MEM32(b + 24), frames = MEM32(b + 8), n = MEM32(b + 12);
     if (rate && !m->paused_at) {
         uint32_t due = (uint32_t)((SDL_GetTicks64() - m->t0) * rate / (1000 * div)) + 1;  /* the frame for now */
-        for (int dropped = 0; n + 1 < due && n < frames && dropped < 4; dropped++, n++) decode_video(m);
+        /* never past Frames - 1: the movie loop ends on FrameNum == Frames - 1 exactly (0x43DF13) */
+        for (int dropped = 0; n + 1 < due && n + 1 < frames && dropped < 4; dropped++, n++) decode_video(m);
         if (n != MEM32(b + 12)) { MEM32(b + 16) = n - 1; MEM32(b + 12) = n; }
     }
     decode_video(m);  /* past the end, the last frame stays */
