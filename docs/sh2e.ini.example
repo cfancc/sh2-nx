@@ -1,6 +1,6 @@
 ; Enhanced Edition packs: data/<folder>/X is read from sh2e/<folder>/X when it exists (1 = on).
 ; The title and save screen art always comes from sh2e/ when it is there.
-; movie: the FMV pack's 60 fps videos play at speed now, but 1080p60 Bink decoding is heavy for the Switch (frames are dropped).
+; movie: the FMV pack's 1080p60 videos (the Switch drops frames decoding them; 0 plays the original videos).
 pic=1
 menu=1
 bg=1
@@ -10,7 +10,7 @@ chr2=1
 font=1
 etc=1
 sound=1
-movie=0
+movie=1
 ; resolution=1280x720    the default; 1920x1080 for docked play; 960x720 is the original 4:3
 ; handheld=480           lines the screen-sized render targets are drawn with in handheld mode (then scaled to
 ; docked=720             the screen), and docked; the defaults. 0 draws them at the game's resolution

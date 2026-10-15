@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Lays out the SD card folder: <out>/switch/sh2-nx/ with the NRO, the exe, data/, the Enhanced Edition's
-sh2e/ (without its FMV pack, which the port cannot play at the right speed yet) and the settings files.
+sh2e/ (without its PS2 extras) and the settings files.
 
 Usage: make_sd.py <out dir> [--game <PC game folder>] [--keyconf <keyconf.dat>] [--lang en|fr|de|it|es|jp]
 Files already present and the same size are not copied again.
@@ -42,7 +42,7 @@ def main():
     n += copy(os.path.join(a.game, 'sh2pc.exe'), os.path.join(dst, 'sh2pc.exe'))
     n += copy_tree(os.path.join(a.game, 'data'), os.path.join(dst, 'data'))
     if os.path.isdir(os.path.join(a.game, 'sh2e')):
-        n += copy_tree(os.path.join(a.game, 'sh2e'), os.path.join(dst, 'sh2e'), skip=('movie', 'ps2'))
+        n += copy_tree(os.path.join(a.game, 'sh2e'), os.path.join(dst, 'sh2e'), skip=('ps2',))
         if not os.path.exists(os.path.join(dst, 'sh2e.ini')):
             with open(os.path.join(dst, 'sh2e.ini'), 'w', newline='\n') as f:
                 f.write(SH2E_INI)

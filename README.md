@@ -7,7 +7,7 @@
 
 <p align=center><a href="https://discord.gg/H9yb3hSkvf"><img src="https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?logo=discord&logoColor=white" alt="Discord"></a></p>
 
-<p align=center><b>v0.65</b></p>
+<p align=center><b>v0.66</b></p>
 
 A native Nintendo Switch port of the PC version of **Silent Hill 2** (Director's Cut / Restless Dreams), with
 support for the packs of **[Silent Hill 2: Enhanced Edition](https://enhanced.townofsilenthill.com/SH2/)**.
@@ -27,7 +27,7 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
 - **Widescreen**: 16:9 at 1280x720 by default, 1920x1080 for docked play, or the original 4:3 (ThirteenAG's
   WidescreenFix, ported).
 - **Enhanced Edition packs**: HD textures and maps, the EE title and save screens, the restored music, voices and sound
-  effects, EE menus and fonts. The FMV pack plays at speed but drops frames on the Switch (`movie=1`).
+  effects, EE menus and fonts, and the FMV pack's 1080p60 movies with their subtitles (`movie=1`).
 - **Enhanced Edition fixes**: search camera on the right stick, movement on the d-pad, pause menu fix, vibration
   fixes.
 - **Controller**: SH2EE's button layout with Nintendo's A/B, HD rumble following the in-game Vibration option.
@@ -36,6 +36,16 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
   original 30, since the Switch can't hold 60 everywhere yet ([60 fps](#60-fps-experimental)).
 - **Shader cache**: shaders are compiled once and kept on the SD card, so areas only stutter the first time.
 - Also builds for Linux (x86-64), which is where most of the debugging happens.
+
+## What's new in v0.66
+
+- **Enhanced Edition movies** (the FMV pack, `movie=1`) now work all the way through. After a movie the game no
+  longer stays on a black screen (with the sound still playing) until the cutscene is skipped: when the Switch fell
+  behind decoding the 1080p60 videos, the frames it dropped to keep up could skip the very frame the game waits for
+  to end the movie. Reported by GloriousCheese (e.g. James at the mirror, right after New Game).
+- **Movie subtitles** keep up with those movies: they followed how many frames the game had drawn, not where the
+  video was, so with dropped frames they came late and most never showed.
+- `movie=1` is on in the example `sh2e.ini`, and `tools/make_sd.py` now copies `sh2e/movie` (about 1.9 GB).
 
 ## What's new in v0.65
 
@@ -126,7 +136,7 @@ Everything since the first release:
      sh2-nx.nro
      sh2pc.exe        (from your PC install)
      data/            (from your PC install, about 2.4 GB)
-     sh2e/            (from your PC install, without sh2e/movie: about 4 GB)
+     sh2e/            (from your PC install, about 6 GB with sh2e/movie)
      sh2e.ini         (which Enhanced Edition packs to use: docs/sh2e.ini.example)
      language.ini     (optional: SET DX_CONFIG_LANGUAGE 1 is English)
      keyconf.dat      (optional: your PC's button mapping)
@@ -175,7 +185,7 @@ button is in the same place as on an Xbox pad with the Enhanced Edition. Remap t
 | Setting | Effect |
 | --- | --- |
 | `pic=1`, `sound=1`, `bg=1`, ... | read that folder of `data/` from `sh2e/` (the Enhanced Edition pack) |
-| `movie=0` | the FMV pack (`sh2e/movie`): its 60 fps videos now play at speed, but 1080p60 Bink decoding is heavy for the Switch, so it drops frames; try `movie=1` |
+| `movie=1` | the FMV pack (`sh2e/movie`): its 1080p60 videos play at speed with their subtitles; the Switch drops frames decoding them. `movie=0` plays the original videos |
 | `resolution=1280x720` | the default; `1920x1080` for docked play, `960x720` for the original 4:3 |
 | `handheld=480`, `docked=720` | the defaults: how many lines the screen-sized render targets are drawn with in each mode, then scaled to the screen (the game is still laid out for `resolution`); `0` draws them at the game's resolution. Docking or undocking switches at the next frame |
 | `fps=60` | experimental: the Enhanced Edition's `SetSixtyFPS`, with its fixes for what the game timed by frames (see below). The default is `30`, the original |
@@ -196,7 +206,7 @@ timer of EE's SpecialFX (the blur is somewhat stronger at 60 fps).
 
 The movie loop no longer waits for the 30 Hz limiter (EE `FixFMVSpeed`), subtitles follow the video's frame rate
 (EE `FmvSubtitlesSyncFix`), and a video the Switch cannot decode in time drops frames to keep up with its sound.
-With that the FMV pack's 60 fps videos play at speed, so `movie=1` can be tried.
+With that the FMV pack's 60 fps videos play at speed (`movie=1`).
 
 ## Building the NRO
 
