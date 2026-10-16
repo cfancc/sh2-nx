@@ -23,6 +23,11 @@ if(NINTENDO_SWITCH)
   # Built with the devkitPro toolchain (tools/build-switch.sh); OpenGL comes through EGL and mesa.
   target_include_directories(sh2 PRIVATE ${DEVKITPRO}/portlibs/switch/include)
   target_link_libraries(sh2 PRIVATE SDL2 EGL glapi drm_nouveau stdc++ pthread m)
+  # The release NRO: no log (log=1, nxlink), call trace or debugging hooks. -DSH2_LEAN=OFF brings them back.
+  option(SH2_LEAN "Switch build without logs, traces or debugging hooks" ON)
+  if(SH2_LEAN)
+    target_compile_definitions(sh2 PRIVATE SH2_LEAN RECOMP_NO_ICALL_TRACE)
+  endif()
   nx_generate_nacp(sh2.nacp NAME "Silent Hill 2" AUTHOR "sh2-nx" VERSION "1.00")
   nx_create_nro(sh2 OUTPUT sh2-nx.nro NACP sh2.nacp NOICON)
 else()

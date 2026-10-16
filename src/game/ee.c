@@ -293,7 +293,9 @@ static void ee_widescreen_init(void) {
         if (sscanf(line, " fps = %u", &n) == 1) ee_fps = n == 60 ? 60 : 30;
         if (sscanf(line, " FlashlightToggleSFX = %u", &n) == 1) sfx_flashlight = n;
         if (sscanf(line, " PreserveSoundsOnLoad = %u", &n) == 1) sfx_save_load = n;
+#ifndef SH2_LEAN
         if (sscanf(line, " trace = %u", &n) == 1) rt_trace = n;  /* debugging: log every bridged call */
+#endif
         if (sscanf(line, " ws%u = %31s", &n, val) == 2 && n < 160) {
             if (strchr(val, '.')) ws_setf(WS_VAR(n), (float)atof(val));
             else MEM32(WS_VAR(n)) = (uint32_t)atoi(val);

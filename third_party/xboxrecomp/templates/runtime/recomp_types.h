@@ -350,6 +350,18 @@ extern RECOMP_TLS volatile uint32_t g_icall_trace_idx;
 /** Count of indirect calls executed by this thread. */
 extern RECOMP_TLS volatile uint64_t g_icall_count;
 
+/* Records an indirect call in the ring. RECOMP_NO_ICALL_TRACE (a release build) drops it: three
+ * thread-local stores on every indirect call, read only by a crash dump. */
+#ifdef RECOMP_NO_ICALL_TRACE
+#define RECOMP_ICALL_RECORD(va) ((void)0)
+#else
+#define RECOMP_ICALL_RECORD(va) do { \
+    g_icall_trace[g_icall_trace_idx & (ICALL_TRACE_SIZE-1)] = (va); \
+    g_icall_trace_idx++; \
+    g_icall_count++; \
+} while (0)
+#endif
+
 /**
  * Called when an indirect call target cannot be resolved.
  * Implement this in your game-specific code to log diagnostics.
@@ -981,9 +993,7 @@ extern volatile uint64_t g_icall_guard_misses;
  */
 #define RECOMP_ICALL(xbox_va) do { \
     uint32_t _va = (uint32_t)(xbox_va); \
-    g_icall_trace[g_icall_trace_idx & (ICALL_TRACE_SIZE-1)] = _va; \
-    g_icall_trace_idx++; \
-    g_icall_count++; \
+    RECOMP_ICALL_RECORD(_va); \
     /* Skip garbage VAs outside code section + kernel thunk range */ \
     if (!RECOMP_ICALL_IS_CODE(_va)) { \
         recomp_icall_not_code_log(_va); \
@@ -1008,9 +1018,7 @@ extern volatile uint64_t g_icall_guard_misses;
  */
 #define RECOMP_ICALL_SAFE(xbox_va, saved_esp) do { \
     uint32_t _va = (uint32_t)(xbox_va); \
-    g_icall_trace[g_icall_trace_idx & (ICALL_TRACE_SIZE-1)] = _va; \
-    g_icall_trace_idx++; \
-    g_icall_count++; \
+    RECOMP_ICALL_RECORD(_va); \
     if (!RECOMP_ICALL_IS_CODE(_va)) { \
         recomp_icall_not_code_log(_va); \
         g_esp = (saved_esp); eax = 0; break; \
@@ -1034,9 +1042,7 @@ extern volatile uint64_t g_icall_guard_misses;
  */
 #define RECOMP_ICALL_SAFE_AT(xbox_va, saved_esp, site) do { \
     uint32_t _va = (uint32_t)(xbox_va); \
-    g_icall_trace[g_icall_trace_idx & (ICALL_TRACE_SIZE-1)] = _va; \
-    g_icall_trace_idx++; \
-    g_icall_count++; \
+    RECOMP_ICALL_RECORD(_va); \
     if (!RECOMP_ICALL_IS_CODE(_va)) { \
         recomp_icall_not_code_log(_va); \
         g_esp = (saved_esp); eax = 0; break; \

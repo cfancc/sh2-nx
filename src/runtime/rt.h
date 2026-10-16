@@ -35,11 +35,16 @@ static inline void rt_fpush(double v) { g_fp_top = (g_fp_top + 7) & 7; g_fp_stac
 static inline double rt_fpop(void) { double v = g_fp_stack[g_fp_top]; g_fp_top = (g_fp_top + 1) & 7; return v; }
 
 /* rt_core.c */
+#ifdef SH2_LEAN  /* the release NRO (CMake SH2_LEAN): no log and no call trace, compiled out */
+static inline __attribute__((format(printf, 1, 2))) void rt_log(const char *fmt, ...) { (void)fmt; }
+#define rt_trace 0
+#else
 void rt_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+extern int rt_trace;                 /* SH2_TRACE=1: log every bridged call */
+#endif
 _Noreturn void rt_fatal(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void rt_dump_thread(void);
 extern int rt_frame;                 /* frames presented so far */
-extern int rt_trace;                 /* SH2_TRACE=1: log every bridged call */
 extern char rt_game_dir[512];        /* folder with sh2pc.exe and data/ */
 uint32_t galloc(uint32_t size);      /* guest heap, 16-byte aligned, zeroed */
 void gfree(uint32_t va);
