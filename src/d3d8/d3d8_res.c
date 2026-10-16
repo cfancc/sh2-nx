@@ -1,6 +1,7 @@
 /* Textures, surfaces and buffers. The game locks a guest memory copy; GL work happens lazily on the
  * render thread (at bind or draw time), so a loader thread may create and fill resources. */
 #include "d3d8.h"
+#include "../game/ee_font.h"
 
 static Res *table[1 << 16];
 static uint32_t next_slot = 1;
@@ -500,6 +501,8 @@ static uint32_t lock_surface(Res *s, uint32_t locked, uint32_t rect) {
 }
 static uint32_t unlock_surface(Res *s) {
     if (!s) return D3DERR_INVALIDCALL;
+    if (s->parent && s->level == 0 && s->fmt == FMT_A8R8G8B8)
+        ee_font_overlay(s->parent->obj, s->mem, s->pitch, s->w, s->h);
     if (s->parent || !s->is_rt) mark_dirty(s);
     else upload_rt(s, 0, 0, s->w, s->h, fmt_info(s->fmt), GPTR(s->mem), 0);  /* a locked render target: push the guest copy back */
     return 0;
