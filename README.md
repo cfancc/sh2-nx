@@ -1,3 +1,5 @@
+> Fork branch: [Chinese adaptation build, setup and validation](docs/CHINESE.md) (`v1.00-zh1`, hardware testing pending).
+
 <div align=center>
 
 <img src="docs/banner.png" alt="Silent Hill 2" width="70%">
