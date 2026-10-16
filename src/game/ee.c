@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <ctype.h>
 #include "../runtime/host.h"
+#include "ee_font.h"
 #include "ee_sfx.h"
 
 /* ---- game state (EE Patches/Common.cpp, Patches.h) ---- */
@@ -597,6 +598,7 @@ void ee_init(void) {
     ee_fps_init();
     ee_extra_sounds_init();
     ee_map_scaling(1024, 1024);
+    ee_font_init();
     float one = 1.0f;
     memcpy(GPTR(0x0EC01000u), &one, 4);  /* texture scale X/Y (FullscreenImages) */
     memcpy(GPTR(0x0EC01004u), &one, 4);
