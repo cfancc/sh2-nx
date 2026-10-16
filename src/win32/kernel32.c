@@ -60,6 +60,21 @@ static const char *rt_path_base(const char *guest, char *out, size_t n);
 
 const char *rt_path(const char *guest, char *out, size_t n) {
     const char *r = rt_path_base(guest, out, n);
+    /* EE language packs override ordinary and enhanced resources alike. */
+    if (!strncasecmp(r, "data/", 5)) {
+        char alt[512], res[512];
+        struct stat st;
+        const char *rel = r + 5;
+        if (!strcasecmp(rel, "etc/resource/r_menu_e.res") && MEM8(0x01DBC006u) == 0)
+            rel = "etc/resource/r_menu_j.res";
+        snprintf(alt, sizeof alt, "lang/%s", rel);
+        rt_path_base(alt, res, sizeof res);
+        if (stat(res, &st) == 0 && S_ISREG(st.st_mode)) {
+            if (rt_trace) rt_log("  lang: %s", res);
+            snprintf(out, n, "%s", res);
+            return out;
+        }
+    }
     if (!strncasecmp(r, "data/", 5) && sh2e_enabled(r + 5)) {
         char alt[512], res[512];
         struct stat st;
