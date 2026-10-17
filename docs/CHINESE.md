@@ -1,5 +1,7 @@
 # Chinese language adaptation (v1.00-zh1)
 
+Windows build helper and Chinese maintenance guide: [MAINTENANCE_ZH.md](MAINTENANCE_ZH.md).
+
 This fork branch preserves the local Chinese adaptation built from upstream
 `v1.00` (`7a56503f453ef05975cb5bfac5bcdb9d6db20a3b`). It is not an upstream
 release. The later upstream `main` logging changes are not part of this baseline.
