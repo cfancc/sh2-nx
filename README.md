@@ -7,7 +7,7 @@
 
 <p align=center><a href="https://discord.gg/H9yb3hSkvf"><img src="https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?logo=discord&logoColor=white" alt="Discord"></a></p>
 
-<p align=center><b>v1.00</b></p>
+<p align=center><b>v1.01</b></p>
 
 A native Nintendo Switch port of the PC version of **Silent Hill 2** (Director's Cut / Restless Dreams), with
 support for the packs of **[Silent Hill 2: Enhanced Edition](https://enhanced.townofsilenthill.com/SH2/)**.
@@ -24,7 +24,7 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
 ## Features
 
 - **Native code**: every function of `sh2pc.exe` runs as ARM64 code; no emulator, no Wine.
-- **Widescreen**: 16:9 at 1280x720 by default, 1920x1080 for docked play, or the original 4:3 (ThirteenAG's
+- **Widescreen**: 16:9, drawn at 720p handheld and 1080p docked, or the original 4:3 (ThirteenAG's
   WidescreenFix, ported).
 - **Enhanced Edition packs**: HD textures and maps, the EE title and save screens, the restored music, voices and sound
   effects, EE menus and fonts, and the FMV pack's 1080p60 movies with their subtitles (`movie=1`).
@@ -32,8 +32,6 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
   fixes.
 - **Controller**: SH2EE's button layout with Nintendo's A/B, HD rumble following the in-game Vibration option.
 - **Saving and loading**, movies with synced audio, every menu.
-- **60 fps (experimental)**: `fps=60` in `sh2e.ini` turns on the Enhanced Edition's 60 fps mode. The default is the
-  original 30, since the Switch can't hold 60 everywhere yet ([60 fps](#60-fps-experimental)).
 - **Shader cache**: shaders are compiled once and kept on the SD card, so areas only stutter the first time.
 - Also builds for Linux (x86-64), which is where most of the debugging happens.
 
@@ -108,27 +106,18 @@ button is in the same place as on an Xbox pad with the Enhanced Edition. Remap t
 | --- | --- |
 | `pic=1`, `sound=1`, `bg=1`, ... | read that folder of `data/` from `sh2e/` (the Enhanced Edition pack) |
 | `movie=1` | the FMV pack (`sh2e/movie`): its 1080p60 videos play at speed with their subtitles; the Switch drops frames decoding them. `movie=0` plays the original videos |
-| `resolution=1280x720` | the default; `1920x1080` for docked play, `960x720` for the original 4:3 |
-| `handheld=480`, `docked=720` | the defaults: how many lines the screen-sized render targets are drawn with in each mode, then scaled to the screen (the game is still laid out for `resolution`); `0` draws them at the game's resolution. Docking or undocking switches at the next frame |
-| `fps=60` | experimental: the Enhanced Edition's `SetSixtyFPS`, with its fixes for what the game timed by frames (see below). The default is `30`, the original |
+| `resolution=1920x1080` | the default; `1280x720` for a lighter game, `960x720` for the original 4:3 |
+| `handheld=720`, `docked=0` | the defaults (720p handheld, 1080p docked): how many lines the screen-sized render targets are drawn with in each mode, then scaled to the screen (the game is still laid out for `resolution`); `0` draws them at the game's resolution. Docking or undocking switches at the next frame |
 | `FlashlightToggleSFX=0` | no click when the flashlight is switched (on by default when `sh2e/sound/extra` has the sounds) |
 | `PreserveSoundsOnLoad=0` | the game's own load and save sounds, which loading cuts off (by default the Enhanced Edition's play through) |
 | `cores=1` | every game thread on one core, a fallback if the music ever loops again |
 | `log=1` | write `sh2.log` next to the NRO, for bug reports (off by default: it costs an SD card write per line). Crashes always go to `sh2-crash.log` |
 
-### 60 fps (experimental)
-
-The game steps its logic in 1/60 s ticks and, limited to 30 fps, takes two per frame; `fps=60` sets its frame
-limiter to 1/60 s (EE `SetSixtyFPS`). When the Switch cannot hold 60 the game keeps its speed, as on the PC.
-Ported from EE's `PatchSixtyFPS`: the fog, meat locker and bullet shell animation rates, the flashlight switch-on
-time, the water animation and water level speeds, the low health flash, the staircase flames, the bug room
-flashlight, hold attack damage per frame, the prisoner's footstep timer and the spray effects. Not ported yet:
-EE's double footstep fix, the map transcription animation timing, and the motion blur intensity and Eddie boss
-timer of EE's SpecialFX (the blur is somewhat stronger at 60 fps).
+### Movies
 
 The movie loop no longer waits for the 30 Hz limiter (EE `FixFMVSpeed`), subtitles follow the video's frame rate
 (EE `FmvSubtitlesSyncFix`), and a video the Switch cannot decode in time drops frames to keep up with its sound.
-With that the FMV pack's 60 fps videos play at speed (`movie=1`).
+With that the FMV pack's 60 fps videos play at speed (`movie=1`). The game itself runs at its original 30 fps.
 
 ## Building the NRO
 

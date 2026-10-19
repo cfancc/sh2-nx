@@ -250,11 +250,11 @@ static uint32_t device_vtable(void);
 static void device_reset(uint32_t pp);
 
 /* ---- render scale (see d3d8.h) ----
- * sh2e.ini: handheld=480 and docked=720 (the defaults) give the number of lines screen-sized targets
- * are drawn with in each mode; 0 draws them at the game's resolution. The mode is read every frame,
+ * sh2e.ini: handheld=720 and docked=0 (the defaults: 720p handheld, the game's 1080p docked) give the number
+ * of lines screen-sized targets are drawn with in each mode; 0 draws them at the game's resolution. The mode is read every frame,
  * so docking or undocking switches at the next Present. On Linux SH2_HANDHELD=1 plays handheld. */
 float rt_scale = 1;
-static uint32_t scale_lines[2] = {480, 720};  /* [handheld, docked] */
+static uint32_t scale_lines[2] = {720, 0};  /* [handheld, docked] */
 static int scale_mode = -1;
 
 static void render_scale_update(void) {
