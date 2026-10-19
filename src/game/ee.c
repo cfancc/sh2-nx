@@ -12,6 +12,7 @@
 #include <ctype.h>
 #include "../runtime/host.h"
 #include "ee_sfx.h"
+#include <libavcodec/avcodec.h>
 
 /* ---- game state (EE Patches/Common.cpp, Patches.h) ---- */
 #define EE_ROOM_ID            0x01FB7DACu
@@ -491,6 +492,121 @@ static void ee_flashlight_sound(void) {
     last_on = on;
 }
 
+/* ---- Custom fonts (EE Patches/Fonts.cpp, PatchCustomFonts) ----
+ * The game draws text from a glyph cache texture: 0x4809F0 decodes the built-in font's glyph of a
+ * character into a free cell of a 25x17 grid of 22x32 cells (550x544). EE fills the cells from
+ * font000.png instead, 44x64 per glyph: sharper text, and the glyphs the built-in font lacks (Japanese,
+ * or a translation's own letters, e.g. Russian from a `lang` folder). The cache texture grows to 25x17 of
+ * the file's cells; the UVs are fractions of the 550x544 layout, so the drawing code is unchanged. */
+#define FONT_TYPE 0x01F5F520u  /* 0 normal, 1 small */
+#define FONT_DATA 0x008038A0u  /* per type: the built-in font (width table of 0xE0 at +0x10) */
+#define FONT_SLOT 0x01F5FEC0u
+static uint8_t *font_px;  /* gray + alpha: the fonts are white glyphs on alpha */
+static int font_w, font_h, font_cw, font_ch, font_glyphs;
+
+static int font_decode(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    uint8_t *buf = calloc(1, n + AV_INPUT_BUFFER_PADDING_SIZE);
+    fseek(f, 0, SEEK_SET);
+    n = buf ? (long)fread(buf, 1, n, f) : 0;
+    fclose(f);
+    const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_PNG);
+    AVCodecContext *ctx = codec ? avcodec_alloc_context3(codec) : NULL;
+    AVPacket *pkt = av_packet_alloc();
+    AVFrame *fr = av_frame_alloc();
+    if (n > 16 && ctx && pkt && fr && avcodec_open2(ctx, codec, NULL) == 0) {
+        pkt->data = buf;
+        pkt->size = (int)n;
+        if (avcodec_send_packet(ctx, pkt) == 0 && avcodec_receive_frame(ctx, fr) == 0 &&
+            (fr->format == AV_PIX_FMT_RGBA || fr->format == AV_PIX_FMT_YA8)) {
+            int bpp = fr->format == AV_PIX_FMT_RGBA ? 4 : 2;
+            font_w = fr->width;
+            font_h = fr->height;
+            int cols = font_w / 44, rows = font_h / 64;
+            if (!memcmp(buf + n - 16, "SH2EEFNT", 8)) {  /* EE's trailer: the grid when cells are not 44x64 */
+                memcpy(&cols, buf + n - 8, 4);
+                memcpy(&rows, buf + n - 4, 4);
+            }
+            if (cols > 0 && rows > 1 && (font_px = malloc((size_t)font_w * font_h * 2))) {
+                font_cw = font_w / cols;
+                font_ch = font_h / rows;
+                font_glyphs = cols * rows / 2;  /* the small font is the bottom half */
+                for (int y = 0; y < font_h; y++)
+                    for (int x = 0; x < font_w; x++) {
+                        const uint8_t *s = fr->data[0] + (size_t)y * fr->linesize[0] + x * bpp;
+                        font_px[((size_t)y * font_w + x) * 2] = s[bpp == 4];  /* G of RGBA, Y of YA */
+                        font_px[((size_t)y * font_w + x) * 2 + 1] = s[bpp - 1];
+                    }
+            }
+        } else
+            rt_log("ee: font: %s is not an 8-bit RGBA or gray + alpha PNG", path);
+    }
+    av_frame_free(&fr);
+    av_packet_free(&pkt);
+    avcodec_free_context(&ctx);
+    free(buf);
+    return font_px != NULL;
+}
+
+static void ee_fonts_init(void) {
+    char rel[64], host[512];
+    for (int j = 4; j >= 0 && !font_px; j--) {  /* EE: the highest numbered font file wins */
+        snprintf(rel, sizeof rel, "data/font/font%03d.png", j);
+        if (!font_decode(rt_path(rel, host, sizeof host))) continue;
+        rt_log("ee: font %s: %dx%d, %dx%d cells", host, font_w, font_h, font_cw, font_ch);
+        snprintf(rel, sizeof rel, "data/font/fontwdata%03d.bin", j);
+        FILE *f = fopen(rt_path(rel, host, sizeof host), "rb");
+        if (!f) f = fopen(rt_path("data/font/fontwdata.bin", host, sizeof host), "rb");
+        uint8_t wd[2 * 0xE0];
+        if (f && fread(wd, 1, sizeof wd, f) == sizeof wd)  /* glyph widths of 0x00-0xDF, normal then small */
+            for (int t = 0; t < 2; t++) memcpy(GPTR(MEM32(FONT_DATA + 4 * t) + 0x10), wd + 0xE0 * t, 0xE0);
+        if (f) fclose(f);
+    }
+}
+
+/* Cave 0x401280, at 0x480A0A where the glyph cache texture is sized (ecx width, eax height). */
+void sub_00401280(void) {
+    uint32_t w = font_px ? 25 * font_cw : 550, h = font_px ? 17 * font_ch : 544;
+    float one = 1.0f;
+    g_ecx = w;
+    g_eax = h;
+    MEM32(0x00943944u) = w;
+    MEM32(0x00943948u) = h;
+    memcpy(GPTR(0x0094394Cu), &one, 4);  /* UV scales */
+    memcpy(GPTR(0x00943950u), &one, 4);
+    g_esp += 4;
+}
+
+/* Cave 0x401288, at 0x480C79 once the glyph's cell (dx) is chosen and the texture locked: EE's
+ * UpdateFontTexture. eax negative: the glyph is copied from the font file, go unlock and return;
+ * else eax and EE_FONT_DATA (ebp is a local of the lifted caller) as the replaced instructions left them. */
+#define EE_FONT_DATA 0x0EC01010u
+void sub_00401288(void) {
+    uint32_t frame = g_esp + 4, type = MEM32(FONT_TYPE) & 1;
+    int slot = (int16_t)g_edx;
+    MEM16(FONT_SLOT) = (uint16_t)slot;
+    g_eax = MEM32(FONT_TYPE);
+    MEM32(EE_FONT_DATA) = MEM32(FONT_DATA + 4 * g_eax);
+    if (font_px) {
+        uint32_t pitch = MEM32(frame + 0x2C), id = MEM16(frame + 0x38);  /* D3DLOCKED_RECT, the character */
+        int cols = font_w / font_cw;
+        if ((int)id >= font_glyphs) id = 0;
+        uint8_t *out = (uint8_t *)GPTR(MEM32(frame + 0x30)) + (size_t)(slot / 25) * pitch * font_ch + slot % 25 * font_cw * 4;
+        const uint8_t *in = font_px + ((size_t)type * (font_h / 2) * font_w + (size_t)(id / cols) * font_ch * font_w +
+                                       id % cols * font_cw) * 2;
+        for (int y = 0; y < font_ch; y++, out += pitch, in += (size_t)font_w * 2)
+            for (int x = 0; x < font_cw; x++) {
+                out[4 * x] = out[4 * x + 1] = out[4 * x + 2] = in[2 * x];
+                out[4 * x + 3] = in[2 * x + 1];
+            }
+        g_eax = 0x80000000u;
+    }
+    g_esp += 4;
+}
+
 /* Called once after sh2pc.exe is loaded. */
 void ee_init(void) {
     host_arena_commit(TEX_BUF1, TEX_BUF3 + 2 * TEX_SIZE - TEX_BUF1);
@@ -498,6 +614,7 @@ void ee_init(void) {
     ee_sfx_init();
     ee_widescreen_init();
     ee_extra_sounds_init();
+    ee_fonts_init();
     ee_map_scaling(1024, 1024);
     float one = 1.0f;
     memcpy(GPTR(0x0EC01000u), &one, 4);  /* texture scale X/Y (FullscreenImages) */

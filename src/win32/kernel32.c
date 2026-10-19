@@ -60,6 +60,19 @@ static const char *rt_path_base(const char *guest, char *out, size_t n);
 
 const char *rt_path(const char *guest, char *out, size_t n) {
     const char *r = rt_path_base(guest, out, n);
+    static int has_lang = -1;  /* EE EnableLangPath: a translation's files in lang/ come before sh2e/ */
+    char lang[16];
+    if (has_lang < 0) has_lang = match_ci("", "lang", lang, sizeof lang);
+    if (has_lang && !strncasecmp(r, "data/", 5)) {
+        char alt[512], res[512];
+        struct stat st;
+        snprintf(alt, sizeof alt, "lang/%s", r + 5);
+        rt_path_base(alt, res, sizeof res);
+        if (stat(res, &st) == 0 && S_ISREG(st.st_mode)) {
+            snprintf(out, n, "%s", res);
+            return out;
+        }
+    }
     if (!strncasecmp(r, "data/", 5) && sh2e_enabled(r + 5)) {
         char alt[512], res[512];
         struct stat st;

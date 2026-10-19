@@ -27,7 +27,8 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
 - **Widescreen**: 16:9, drawn at 720p handheld and 1080p docked, or the original 4:3 (ThirteenAG's
   WidescreenFix, ported).
 - **Enhanced Edition packs**: HD textures and maps, the EE title and save screens, the restored music, voices and sound
-  effects, EE menus and fonts, and the FMV pack's 1080p60 movies with their subtitles (`movie=1`).
+  effects, EE menus, EE's high resolution font (`sh2e/font`, which also has the Japanese text), and the FMV pack's 1080p60
+  movies with their subtitles (`movie=1`). Translations made for the Enhanced Edition load from a `lang` folder.
 - **Enhanced Edition fixes**: search camera on the right stick, movement on the d-pad, pause menu fix, vibration
   fixes.
 - **Controller**: SH2EE's button layout with Nintendo's A/B, HD rumble following the in-game Vibration option.
@@ -59,6 +60,7 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
      sh2e/            (from your PC install, about 6 GB with sh2e/movie)
      sh2e.ini         (which Enhanced Edition packs to use: docs/sh2e.ini.example)
      language.ini     (optional: SET DX_CONFIG_LANGUAGE 1 is English)
+     lang/            (optional: a translation for the Enhanced Edition, e.g. Russian)
      keyconf.dat      (optional: your PC's button mapping)
    ```
 

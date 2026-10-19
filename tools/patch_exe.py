@@ -18,6 +18,7 @@ CAVE_TEX_CLEAR = 0x401970       # ee.c: TexBufferASM
 CAVE_TITLE_LANG = 0x401D60      # ee.c: MainMenuTitleASM
 CAVE_MAP = 0x401240             # eight bytes apart: ee.c map hooks (EE PatchMapImages)
 CAVE_SFX = 0x401268             # eight bytes apart: ee.c load / save / pause confirm sounds (EE PatchCustomSFXs)
+CAVE_FONT = 0x401280            # eight bytes apart: ee.c font texture size, font glyph (EE PatchCustomFonts)
 PLAY_SOUND = 0x515580           # the game's play-sound-effect function
 # EE TexPatch buffers, in guest memory between the image and the heap (0x2500000-0x10000000):
 # 2x and 4x the largest texture file (22,380,640 bytes, sh2e/pic/map), as EE sizes them.
@@ -27,6 +28,7 @@ SFX_BUF = 0xD0000000
 # Guest variables owned by ee.c (0x0EC00000 page, committed in ee_init).
 EE_TEX_SCALE_X, EE_TEX_SCALE_Y = 0x0EC01000, 0x0EC01004
 EE_MAP_SCALE_X, EE_MAP_MARK_WIDTH = 0x0EC01008, 0x0EC0100C
+EE_FONT_DATA = 0x0EC01010
 FRAME_LIMITER = 0x4F6CE0        # busy-waits until 1/30 s has passed
 
 
@@ -135,6 +137,16 @@ PATCHES = [
     *((va, call(va, PLAY_SOUND), call(va, CAVE_SFX), 'load sound') for va in (0x454A64, 0x49870C, 0x497F84)),
     (0x4476DB, call(0x4476DB, PLAY_SOUND), call(0x4476DB, CAVE_SFX + 8), 'save sound (save point)'),
     (0x40282E, call(0x40282E, PLAY_SOUND), call(0x40282E, CAVE_SFX + 16), 'pause menu confirm sound'),
+
+    # -- PatchCustomFonts (UseCustomFonts): the text glyph cache texture (0x4809F0) is sized for and
+    # filled from font000.png when there is one; without it the caves keep the original 550x544 font.
+    *((CAVE_FONT + 8 * i, b'\xCC' * 4, b'\xC3\xCC\xCC\xCC', 'cave: font') for i in range(2)),
+    (0x480A0A, bytes.fromhex('b926020000b820020000890d44399400a348399400c7054c3994000000803fc705503994000000803f'),
+     call(0x480A0A, CAVE_FONT) + b'\x85\xD2' + b'\x90' * 34, 'font texture size hook (test edx, edx again for the jne)'),
+    # call; test eax, eax; js (copied: to the unlock and return); mov ebp, [EE_FONT_DATA] (was [eax*4+0x8038A0])
+    (0x480C79, bytes.fromhex('a120f5f5018b2c85a0388000668915c0fef501'),
+     call(0x480C79, CAVE_FONT + 8) + b'\x85\xC0\x0F\x88' + struct.pack('<i', 0x480EBE - 0x480C86) +
+     b'\x8B\x2D' + p32(EE_FONT_DATA), 'font glyph hook'),
 
     # -- SfxPatch (EnableSFXAddrHack): the sound bank buffer passed to the DirectSound setup.
     (0x515164, p32(0xBDDD40), p32(SFX_BUF), 'sound bank buffer'),
