@@ -27,13 +27,6 @@ SFX_BUF = 0xD0000000
 # Guest variables owned by ee.c (0x0EC00000 page, committed in ee_init).
 EE_TEX_SCALE_X, EE_TEX_SCALE_Y = 0x0EC01000, 0x0EC01004
 EE_MAP_SCALE_X, EE_MAP_MARK_WIDTH = 0x0EC01008, 0x0EC0100C
-EE_SPRAY = 0x0EC01020           # five floats the spray effects read (ee.c: halved at 60 fps)
-# 60 fps (EE SetSixtyFPS, see ee.c): caves in the int3 run at 0x402A50, eight bytes apart.
-CAVE_RATE_HALF = 0x402A50       # ee.c: the frame's delta time, halved at 60 fps
-CAVE_RATE_DOUBLE = 0x402A58     # ee.c: the frame's delta time, doubled at 60 fps
-CAVE_FLASHLIGHT_ON = 0x402A60   # ee.c: flashlight switch-on time in frames
-CAVE_HOLD_DAMAGE = 0x402A68     # ee.c: hold attack damage scaled by delta time
-DELTA_TIME_FN = 0x447830        # fld [0x932D48]: seconds per frame
 FRAME_LIMITER = 0x4F6CE0        # busy-waits until 1/30 s has passed
 
 
@@ -154,36 +147,6 @@ PATCHES = [
     # -- SaveBGImage: the save screen shows the background of the chapter being saved (ee.c resets
     # the chapter to the main scenario at the main menu).
     (0x44B419, bytes.fromhex('7d1d'), b'\x90\x90', 'save screen background per chapter'),
-
-    # -- 60 fps (EE SetSixtyFPS, PatchSixtyFPS; the switch itself is ee.c's sub_004F6C80). These sites
-    # assumed a 1/30 s frame; the caves give them the rate they expect, and only when fps=60 (ee.c).
-    (CAVE_RATE_HALF, b'\xCC' * 4, b'\xC3\xCC\xCC\xCC', 'cave: delta time halved'),
-    (CAVE_RATE_DOUBLE, b'\xCC' * 4, b'\xC3\xCC\xCC\xCC', 'cave: delta time doubled'),
-    (CAVE_FLASHLIGHT_ON, b'\xCC' * 4, b'\xC3\xCC\xCC\xCC', 'cave: flashlight on speed'),
-    (CAVE_HOLD_DAMAGE, b'\xCC' * 4, b'\xC3\xCC\xCC\xCC', 'cave: hold damage'),
-    (0x489120, call(0x489120, DELTA_TIME_FN), call(0x489120, CAVE_RATE_HALF), '60 fps: fog animation rate'),
-    (0x489E8B, call(0x489E8B, DELTA_TIME_FN), call(0x489E8B, CAVE_RATE_DOUBLE), '60 fps: meat locker fog 1'),
-    (0x489E9C, call(0x489E9C, DELTA_TIME_FN), call(0x489E9C, CAVE_RATE_HALF), '60 fps: meat locker fog 2'),
-    (0x4B2426, call(0x4B2426, DELTA_TIME_FN), call(0x4B2426, CAVE_RATE_HALF), '60 fps: meat locker hanger 1'),
-    (0x4B2494, call(0x4B2494, DELTA_TIME_FN), call(0x4B2494, CAVE_RATE_DOUBLE), '60 fps: meat locker hanger 2'),
-    (0x4F0EAC, call(0x4F0EAC, DELTA_TIME_FN), call(0x4F0EAC, CAVE_RATE_DOUBLE), '60 fps: bullet shell animation 1'),
-    (0x4F0EF5, call(0x4F0EF5, DELTA_TIME_FN), call(0x4F0EF5, CAVE_RATE_DOUBLE), '60 fps: bullet shell animation 2'),
-    (0x4F0F12, call(0x4F0F12, DELTA_TIME_FN), call(0x4F0F12, CAVE_RATE_DOUBLE), '60 fps: bullet shell animation 3'),
-    (0x4F0F23, call(0x4F0F23, DELTA_TIME_FN), call(0x4F0F23, CAVE_RATE_DOUBLE), '60 fps: bullet shell animation 4'),
-    # mov word [0x89FF8A], 60 (frames the flashlight takes to come on): the cave writes 120 at 60 fps
-    (0x50A5B6, bytes.fromhex('66c7058aff89003c00'), call(0x50A5B6, CAVE_FLASHLIGHT_ON) + b'\x90' * 4, '60 fps: flashlight on speed'),
-    # fsub dword [esi+0x11C] (health -= hold damage every frame): the cave scales it by the frame time
-    (0x5359E1, bytes.fromhex('d8a61c010000'), call(0x5359E1, CAVE_HOLD_DAMAGE) + b'\x90', '60 fps: hold damage per frame'),
-    # spray particle speeds (EE SprayEffect): fmul [constant] reads ee.c's variables instead
-    (0x4A40F2, p32(0x63348C), p32(EE_SPRAY + 0), '60 fps: lying figure spray speed 0 (0.2)'),
-    (0x4A4029, p32(0x62BF7C), p32(EE_SPRAY + 4), '60 fps: lying figure spray speed 1 (0.25)'),
-    (0x4A3F24, p32(0x69F3F0), p32(EE_SPRAY + 8), '60 fps: lying figure spray speed 2 (0.3)'),
-    (0x4A4585, p32(0x69F3F0), p32(EE_SPRAY + 8), '60 fps: hyper spray speed 0 (0.3)'),
-    (0x4A44FF, p32(0x69F3F0), p32(EE_SPRAY + 8), '60 fps: hyper spray speed 1 (0.3)'),
-    (0x4A443B, p32(0x62FE1C), p32(EE_SPRAY + 16), '60 fps: hyper spray speed 2 (0.5)'),
-    (0x4A4062, p32(0x6A91EC), p32(EE_SPRAY + 12), '60 fps: lying figure spray y adjust 1 (100)'),
-    (0x4A3F5D, p32(0x6A91EC), p32(EE_SPRAY + 12), '60 fps: lying figure spray y adjust 2 (100)'),
-    (0x4A4523, p32(0x6A91EC), p32(EE_SPRAY + 12), '60 fps: hyper spray y adjust (100)'),
 
     # -- FixFMVSpeed (EE FMVPatches): the movie loop no longer waits for the 30 Hz frame limiter, so the
     # Bink clock paces the video; the 60 fps videos of the FMV pack played at half speed.

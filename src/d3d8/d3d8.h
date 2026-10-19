@@ -41,7 +41,7 @@ void res_release(uint32_t obj);
 
 /* ---- render scale ----
  * Screen-sized render and depth targets are drawn at rt_scale times the game's resolution (the Switch
- * renders 480 lines in handheld mode and 720 docked, whatever the game lays itself out for) and the
+ * renders 720 lines in handheld mode and the game's 1080 docked, whatever it lays itself out for) and the
  * result is scaled to the screen at Present. The game never sees it: viewports, scissors, clear and copy
  * rectangles are scaled on the way to GL, and anything that crosses into guest memory (locks,
  * GetFrontBuffer, CopyRects to an image surface) goes through a texture of the game's size. */

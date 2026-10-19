@@ -228,7 +228,7 @@ void sub_00401970(void) {
 /* ---- WidescreenFix (tools/ws_patches.py) ----
  * The game's 2D is laid out in a 4:3 area (the width variable at 0xA33480 holds its width) and these
  * guest variables, moved into the exe's operands by ws_patches.py, carry the wide screen's offsets.
- * `resolution=WxH` in sh2e.ini (default 1280x720; d3d8.c must list it). At 4:3, e.g. 960x720, every
+ * `resolution=WxH` in sh2e.ini (default 1920x1080; d3d8.c must list it). At 4:3, e.g. 960x720, every
  * value is the original. */
 #define WS_BASE   0x0EC01100u
 enum { V_W, V_H, V_FW, V_FH, V_HUD, V_W43, V_TEXT, V_F_05, V_F05, V_N640, V_N480, V_BORDER0, V_BORDER1 };
@@ -242,9 +242,8 @@ static float ws_getf(uint32_t va) { float v; memcpy(&v, GPTR(va), 4); return v; 
 static float ws_text(void) { return ws_getf(WS_VAR(V_TEXT)); }
 
 static int sfx_flashlight = 1, sfx_save_load = 1;  /* sh2e.ini FlashlightToggleSFX / PreserveSoundsOnLoad */
-static int ee_fps = 30;                            /* sh2e.ini fps=60 (EE SetSixtyFPS) or 30, the original */
 static void ee_widescreen_init(void) {
-    uint32_t w = 1280, h = 720;
+    uint32_t w = 1920, h = 1080;
     FILE *f = fopen("sh2e.ini", "r");
     char line[128];
     while (f && fgets(line, sizeof line, f)) {
@@ -290,7 +289,6 @@ static void ee_widescreen_init(void) {
         unsigned n;
         char val[32];
         if (sscanf(line, " cores = %u", &n) == 1) cores = n;
-        if (sscanf(line, " fps = %u", &n) == 1) ee_fps = n == 60 ? 60 : 30;
         if (sscanf(line, " FlashlightToggleSFX = %u", &n) == 1) sfx_flashlight = n;
         if (sscanf(line, " PreserveSoundsOnLoad = %u", &n) == 1) sfx_save_load = n;
 #ifndef SH2_LEAN
@@ -415,87 +413,8 @@ void sub_00401260(void) {  /* mov eax, [height]; a map page's or a fill's screen
     g_esp += 4;
 }
 
-/* ---- 60 fps (EE SetSixtyFPS: WidescreenFix FPSLimit and Patches/SixtyFPSPatch.cpp) ----
- * The game steps its logic in 1/60 s ticks and, limited to 30 fps, takes two per frame: 0x4F6C80 sets the
- * frame time to QueryPerformanceFrequency / 30 and 0x4F6CE0 waits for it. At fps=60 the frame time is
- * frequency / 60 and the game takes one tick per frame. The code that assumed a 1/30 s frame is given
- * what it expects through the caves tools/patch_exe.py routes to the functions below. */
-#define FRAME_FREQ   0x00A33348u   /* QueryPerformanceFrequency, 64-bit */
-#define FRAME_TICKS  0x00A33350u   /* ticks per frame, 64-bit: frequency / fps */
-#define FRAME_FPS    0x00A33364u   /* measured frame rate, starts at the target */
-#define DELTA_TIME   0x00932D48u   /* seconds per frame, what 0x447830 returns in ST(0) */
-#define EE_SPRAY     0x0EC01020u   /* five floats the spray effects read (tools/patch_exe.py) */
-
-extern void sub_004F6C80_gen(void);
-void sub_004F6C80(void) {  /* frame limiter setup */
-    sub_004F6C80_gen();
-    if (ee_fps != 60) return;
-    uint64_t freq = MEM32(FRAME_FREQ) | (uint64_t)MEM32(FRAME_FREQ + 4) << 32, ticks = freq / 60;
-    MEM32(FRAME_TICKS) = (uint32_t)ticks;
-    MEM32(FRAME_TICKS + 4) = (uint32_t)(ticks >> 32);
-    ws_setf(FRAME_FPS, 60.0f);
-}
-
-/* Caves 0x402A50 / 0x402A58 in place of `call 0x447830` (the frame's delta time) at the animation sites
- * EE hooks (fog, meat locker fog and hangers, bullet shells): the rate those sites expect. */
-static void delta_time_scaled(float k) {
-    rt_resolve(0x00447830u)();  /* same stack and return address: it returns for us */
-    if (ee_fps == 60) ST(0) = (float)(ST(0) * k);
-}
-void sub_00402A50(void) { delta_time_scaled(0.5f); }
-void sub_00402A58(void) { delta_time_scaled(2.0f); }
-
-/* Cave 0x402A60 in place of `mov word [0x89FF8A], 60`: frames the flashlight takes to come on. */
-void sub_00402A60(void) {
-    MEM16(0x0089FF8Au) = ee_fps == 60 ? 0x78 : 0x3C;
-    g_esp += 4;
-}
-
-/* Cave 0x402A68 in place of `fsub dword [esi+0x11C]` (health -= an enemy's hold damage, every frame):
- * scaled by the frame time, so Flesh Lips, Abstract Daddy and the final boss hurt as much per second
- * at 60 fps (EE HoldDamage). */
-void sub_00402A68(void) {
-    float damage = MEMF(g_esi + 0x11C);
-    if (ee_fps == 60) damage = MEMF(DELTA_TIME) * 30.0f * damage;
-    ST(0) = (float)(ST(0) - damage);
-    g_esp += 4;
-}
-
-/* The "Ritual" prisoner's footstep timer (EE PrisonerTimer): the reset path (timer <= 0 at entry) sets a
- * new timer in frames, doubled at 60 fps. The other path only counts it down. */
-extern void sub_004AE580_gen(void);
-void sub_004AE580(void) {
-    int32_t timer = SMEM32(g_esi + 0xA0);
-    sub_004AE580_gen();
-    if (ee_fps == 60 && timer <= 0) MEM32(g_esi + 0xA0) <<= 1;
-}
-
-/* Spray effects (EE SprayEffect): the lying figure's and the hyper spray's particle allocators (both
- * functions start at the allocation EE hooks) spawn a particle every other frame at 60 fps, once there
- * is one, so the spray is as dense as at 30. */
-#define PARTICLE_TABLE 0x01DB96C0u
-#define FRAME_COUNTER  0x00933430u
-static int spray_alloc_active(void) {
-    static uint32_t spray_frame, spray_active;
-    uint32_t list = MEM32(PARTICLE_TABLE + 5 * 4);
-    if (list == MEM32(list + 4)) { spray_active = 1; return 1; }  /* no particle yet */
-    uint32_t frame = MEM32(FRAME_COUNTER);
-    if (frame != spray_frame) { spray_frame = frame; spray_active ^= 1; }
-    return spray_active;
-}
-extern void sub_004A4A10_gen(void);
-void sub_004A4A10(void) {
-    if (ee_fps == 60 && !spray_alloc_active()) { g_esp += 4; return; }
-    sub_004A4A10_gen();
-}
-extern void sub_004A5090_gen(void);
-void sub_004A5090(void) {
-    if (ee_fps == 60 && !spray_alloc_active()) { g_esp += 4; return; }
-    sub_004A5090_gen();
-}
-
 /* FMV subtitles (EE FmvSubtitlesSyncFix): the subtitle frame index in esi is timed for the original
- * 29.97 fps videos; with a video at another rate (the FMV pack's 60 fps) it follows that rate. esi is
+ * 29.97 fps videos; with a video at another rate (the FMV pack's 60 fps videos) it follows that rate. esi is
  * the movie loop's pass count, which falls behind the video when bink.c drops late frames (Switch), so
  * the frame actually shown (LastFrameNum, +0x10) is used instead. */
 #define BINK_HANDLE 0x00932740u   /* the game's BINK * (bink.c's BinkOpen: FrameRate +0x14, FrameRateDiv +0x18) */
@@ -506,24 +425,6 @@ void sub_0043DC50(void) {
     if (b && MEM32(b + 0x10)) g_esi = MEM32(b + 0x10);
     if (rate > 0 && div > 0) g_esi = (uint32_t)(int32_t)lrint((int32_t)g_esi * (29.97 / ((double)rate / div)));
     sub_0043DC50_gen();
-}
-
-static void ee_fps_init(void) {
-    float k = ee_fps == 60 ? 0.5f : 1.0f;  /* spray particle speeds: EE halves them at 60 */
-    ws_setf(EE_SPRAY + 0, 0.2f * k);
-    ws_setf(EE_SPRAY + 4, 0.25f * k);
-    ws_setf(EE_SPRAY + 8, 0.3f * k);
-    ws_setf(EE_SPRAY + 12, 100.0f * k);
-    ws_setf(EE_SPRAY + 16, 0.5f * k);
-    rt_log("ee: %d fps", ee_fps);
-    if (ee_fps != 60) return;
-    /* Per-frame constants in the game's data (EE PatchSixtyFPS) */
-    ws_setf(0x006BC194u, 0.0166665f);         /* water animation speed (1/30) */
-    ws_setf(0x007F3E10u, 0.0166665f);         /* low health indicator flash step (0.03, sign flips in play) */
-    ws_setf(0x0070AE40u, 0.00027777222565f);  /* staircase flames lighting (0.000555) */
-    ws_setf(0x0089C1A4u, 20.0f);              /* water level lowering steps (10) */
-    ws_setf(0x006BC1F4u, 5.333333492f);       /* water level rising steps (10.67) */
-    ws_setf(0x006C10A8u, 0.093333332985f);    /* bug room flashlight (0.1867) */
 }
 
 /* ---- Extra sounds (EE PlayWavSound.cpp): the WAVs in sh2e/sound/extra, played on the host so loading
@@ -596,7 +497,6 @@ void ee_init(void) {
     host_arena_commit(TITLE_PATHS, 0x10000);
     ee_sfx_init();
     ee_widescreen_init();
-    ee_fps_init();
     ee_extra_sounds_init();
     ee_map_scaling(1024, 1024);
     float one = 1.0f;
@@ -778,14 +678,6 @@ recomp_func_t ee_lookup_manual(uint32_t va) {
     case 0x00401268u: return sub_00401268;
     case 0x00401270u: return sub_00401270;
     case 0x00401278u: return sub_00401278;
-    case 0x004F6C80u: return sub_004F6C80;
-    case 0x00402A50u: return sub_00402A50;
-    case 0x00402A58u: return sub_00402A58;
-    case 0x00402A60u: return sub_00402A60;
-    case 0x00402A68u: return sub_00402A68;
-    case 0x004AE580u: return sub_004AE580;
-    case 0x004A4A10u: return sub_004A4A10;
-    case 0x004A5090u: return sub_004A5090;
     case 0x0043DC50u: return sub_0043DC50;
     }
     return NULL;
