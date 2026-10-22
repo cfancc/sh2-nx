@@ -5,6 +5,7 @@
 #include <SDL2/SDL.h>
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
+#include <libavutil/sha.h>
 #include <math.h>
 
 #define FADE_MS 700  /* every screen fades in and out */
@@ -412,8 +413,24 @@ static void options(void) {
     }
 }
 
+static int same_image(const uint8_t *png, const uint8_t *end, const char *sha1) {
+    struct AVSHA *sha = av_sha_alloc();
+    uint8_t d[20];
+    char hex[41];
+    if (!sha) return 0;
+    av_sha_init(sha, 160);
+    av_sha_update(sha, png, end - png);
+    av_sha_final(sha, d);
+    av_free(sha);
+    for (int i = 0; i < 20; i++) snprintf(hex + 2 * i, 3, "%02x", d[i]);
+    return !strcmp(hex, sha1);
+}
+
+static int warning_shown;
+
 /* A warning screen: wait_ms after it has faded in, "Press A" fades in, and the screen waits for it. */
-static void splash(const uint8_t *png, const uint8_t *end, Uint64 wait_ms) {
+static void splash(const uint8_t *png, const uint8_t *end, Uint64 wait_ms, const char *sha1) {
+    warning_shown = same_image(png, end, sha1);
     int w, h;
     uint32_t *px = decode(png, end, &w, &h);
     if (!px) { rt_log("launcher: can't decode a splash image"); return; }
@@ -438,9 +455,13 @@ static void splash(const uint8_t *png, const uint8_t *end, Uint64 wait_ms) {
     fade(0);
 }
 
+void ee_init(void);  /* src/game/ee.c */
+
 void launcher_run(void) {
+#ifndef __SWITCH__
     /* Scripted runs (SH2_KEYS) go straight to the game; SH2_LAUNCHER=1 keeps the launcher for testing it. */
-    if (getenv("SH2_KEYS") && !getenv("SH2_LAUNCHER")) return;
+    if (getenv("SH2_KEYS") && !getenv("SH2_LAUNCHER")) { ee_init(); return; }
+#endif
     rt_window_open();
     gl_context_open();
     int fh;
@@ -453,7 +474,7 @@ void launcher_run(void) {
     glClearColor(0, 0, 0, 1);
     logo_px = decode(logo_png, logo_png_end, &logo_w, &logo_h);
     sound_init();
-    splash(splash_png, splash_png_end, 4000);
+    splash(splash_png, splash_png_end, 4000, SPLASH_SHA1);
     ini_load();
     draw_menu(0);
     fade(1);
@@ -479,4 +500,5 @@ void launcher_run(void) {
     free(font_px);
     free(logo_px);
     sound_close();
+    if (warning_shown) ee_init();
 }

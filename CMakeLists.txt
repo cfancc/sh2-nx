@@ -14,7 +14,10 @@ target_include_directories(sh2 PRIVATE src/recomp/gen)
 target_compile_options(sh2 PRIVATE -fwrapv -fno-strict-aliasing)
 set_source_files_properties(${GEN} PROPERTIES COMPILE_OPTIONS "-w")
 # The launcher's images are built into the binary (src/d3d8/launcher.c).
-set_source_files_properties(src/d3d8/launcher.c PROPERTIES COMPILE_DEFINITIONS "SRC_DIR=\"${CMAKE_SOURCE_DIR}\""
+file(SHA1 ${CMAKE_SOURCE_DIR}/assets/splash.png SPLASH_SHA1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS assets/splash.png)
+set_source_files_properties(src/d3d8/launcher.c PROPERTIES COMPILE_DEFINITIONS
+                            "SRC_DIR=\"${CMAKE_SOURCE_DIR}\";SPLASH_SHA1=\"${SPLASH_SHA1}\""
                             OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/assets/splash.png;${CMAKE_SOURCE_DIR}/docs/banner.png;${CMAKE_SOURCE_DIR}/assets/font.png")
 
 # The movies (src/win32/bink.c): FFmpeg's Bink decoders. On Fedora: dnf install ffmpeg-free-devel.

@@ -474,7 +474,6 @@ static uint32_t load_exe(const char *path) {
 }
 
 extern void xbe_entry_point(void);
-void ee_init(void);  /* src/game/ee.c */
 void launcher_run(void);  /* src/d3d8/launcher.c */
 
 /* The game runs on a thread of its own: lifted code recurses as deep as the guest and the main
@@ -483,7 +482,6 @@ static void game_thread(void *unused) {
     (void)unused;
     rt_thread_init_main(1u << 20);
     launcher_run();
-    ee_init();
     xbe_entry_point();
     rt_log("entry point returned");
     exit(0);
