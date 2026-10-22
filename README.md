@@ -7,7 +7,7 @@
 
 <p align=center><a href="https://discord.gg/H9yb3hSkvf"><img src="https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?logo=discord&logoColor=white" alt="Discord"></a></p>
 
-<p align=center><b>v1.01</b></p>
+<p align=center><b>v1.02</b></p>
 
 A native Nintendo Switch port of the PC version of **Silent Hill 2** (Director's Cut / Restless Dreams), with
 support for the packs of **[Silent Hill 2: Enhanced Edition](https://enhanced.townofsilenthill.com/SH2/)**.
@@ -24,6 +24,7 @@ kernel32...) is reimplemented on top of SDL2, OpenGL and FFmpeg.
 ## Features
 
 - **Native code**: every function of `sh2pc.exe` runs as ARM64 code; no emulator, no Wine.
+- **Launcher**: Play and Options before the game; Options changes the main `sh2e.ini` settings on the console.
 - **Widescreen**: 16:9, drawn at 720p handheld and 1080p docked, or the original 4:3 (ThirteenAG's
   WidescreenFix, ported).
 - **Enhanced Edition packs**: HD textures and maps, the EE title and save screens, the restored music, voices and sound
@@ -102,7 +103,8 @@ button is in the same place as on an Xbox pad with the Enhanced Edition. Remap t
 
 ## Settings
 
-`sh2e.ini`, next to the NRO ([example](docs/sh2e.ini.example)):
+`sh2e.ini`, next to the NRO ([example](docs/sh2e.ini.example)); the launcher's Options screen sets `resolution`,
+`handheld`, `docked`, `movie`, `PreserveSoundsOnLoad` and `cores`:
 
 | Setting | Effect |
 | --- | --- |
