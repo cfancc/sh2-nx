@@ -475,12 +475,15 @@ static uint32_t load_exe(const char *path) {
 
 extern void xbe_entry_point(void);
 void ee_init(void);  /* src/game/ee.c */
+void launcher_run(void);  /* src/d3d8/launcher.c */
 
 /* The game runs on a thread of its own: lifted code recurses as deep as the guest and the main
  * thread's stack is not ours to size on every platform. */
 static void game_thread(void *unused) {
     (void)unused;
     rt_thread_init_main(1u << 20);
+    launcher_run();
+    ee_init();
     xbe_entry_point();
     rt_log("entry point returned");
     exit(0);
@@ -520,7 +523,6 @@ int main(int argc, char **argv) {
     arena_init();
     recomp_dispatch_init();
     load_exe("sh2pc.exe");
-    ee_init();
     host_thread_start(game_thread, NULL, 16u << 20);
     for (;;) sleep(1000);
 }
