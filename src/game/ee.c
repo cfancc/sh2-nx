@@ -13,6 +13,7 @@
 #include "../runtime/host.h"
 #include "ee_font.h"
 #include "ee_sfx.h"
+#include <libavcodec/avcodec.h>
 
 /* ---- game state (EE Patches/Common.cpp, Patches.h) ---- */
 #define EE_ROOM_ID            0x01FB7DACu
@@ -229,7 +230,7 @@ void sub_00401970(void) {
 /* ---- WidescreenFix (tools/ws_patches.py) ----
  * The game's 2D is laid out in a 4:3 area (the width variable at 0xA33480 holds its width) and these
  * guest variables, moved into the exe's operands by ws_patches.py, carry the wide screen's offsets.
- * `resolution=WxH` in sh2e.ini (default 1280x720; d3d8.c must list it). At 4:3, e.g. 960x720, every
+ * `resolution=WxH` in sh2e.ini (default 1920x1080; d3d8.c must list it). At 4:3, e.g. 960x720, every
  * value is the original. */
 #define WS_BASE   0x0EC01100u
 enum { V_W, V_H, V_FW, V_FH, V_HUD, V_W43, V_TEXT, V_F_05, V_F05, V_N640, V_N480, V_BORDER0, V_BORDER1 };
@@ -243,9 +244,8 @@ static float ws_getf(uint32_t va) { float v; memcpy(&v, GPTR(va), 4); return v; 
 static float ws_text(void) { return ws_getf(WS_VAR(V_TEXT)); }
 
 static int sfx_flashlight = 1, sfx_save_load = 1;  /* sh2e.ini FlashlightToggleSFX / PreserveSoundsOnLoad */
-static int ee_fps = 30;                            /* sh2e.ini fps=60 (EE SetSixtyFPS) or 30, the original */
 static void ee_widescreen_init(void) {
-    uint32_t w = 1280, h = 720;
+    uint32_t w = 1920, h = 1080;
     FILE *f = fopen("sh2e.ini", "r");
     char line[128];
     while (f && fgets(line, sizeof line, f)) {
@@ -291,10 +291,11 @@ static void ee_widescreen_init(void) {
         unsigned n;
         char val[32];
         if (sscanf(line, " cores = %u", &n) == 1) cores = n;
-        if (sscanf(line, " fps = %u", &n) == 1) ee_fps = n == 60 ? 60 : 30;
         if (sscanf(line, " FlashlightToggleSFX = %u", &n) == 1) sfx_flashlight = n;
         if (sscanf(line, " PreserveSoundsOnLoad = %u", &n) == 1) sfx_save_load = n;
+#ifndef SH2_LEAN
         if (sscanf(line, " trace = %u", &n) == 1) rt_trace = n;  /* debugging: log every bridged call */
+#endif
         if (sscanf(line, " ws%u = %31s", &n, val) == 2 && n < 160) {
             if (strchr(val, '.')) ws_setf(WS_VAR(n), (float)atof(val));
             else MEM32(WS_VAR(n)) = (uint32_t)atoi(val);
@@ -414,87 +415,8 @@ void sub_00401260(void) {  /* mov eax, [height]; a map page's or a fill's screen
     g_esp += 4;
 }
 
-/* ---- 60 fps (EE SetSixtyFPS: WidescreenFix FPSLimit and Patches/SixtyFPSPatch.cpp) ----
- * The game steps its logic in 1/60 s ticks and, limited to 30 fps, takes two per frame: 0x4F6C80 sets the
- * frame time to QueryPerformanceFrequency / 30 and 0x4F6CE0 waits for it. At fps=60 the frame time is
- * frequency / 60 and the game takes one tick per frame. The code that assumed a 1/30 s frame is given
- * what it expects through the caves tools/patch_exe.py routes to the functions below. */
-#define FRAME_FREQ   0x00A33348u   /* QueryPerformanceFrequency, 64-bit */
-#define FRAME_TICKS  0x00A33350u   /* ticks per frame, 64-bit: frequency / fps */
-#define FRAME_FPS    0x00A33364u   /* measured frame rate, starts at the target */
-#define DELTA_TIME   0x00932D48u   /* seconds per frame, what 0x447830 returns in ST(0) */
-#define EE_SPRAY     0x0EC01020u   /* five floats the spray effects read (tools/patch_exe.py) */
-
-extern void sub_004F6C80_gen(void);
-void sub_004F6C80(void) {  /* frame limiter setup */
-    sub_004F6C80_gen();
-    if (ee_fps != 60) return;
-    uint64_t freq = MEM32(FRAME_FREQ) | (uint64_t)MEM32(FRAME_FREQ + 4) << 32, ticks = freq / 60;
-    MEM32(FRAME_TICKS) = (uint32_t)ticks;
-    MEM32(FRAME_TICKS + 4) = (uint32_t)(ticks >> 32);
-    ws_setf(FRAME_FPS, 60.0f);
-}
-
-/* Caves 0x402A50 / 0x402A58 in place of `call 0x447830` (the frame's delta time) at the animation sites
- * EE hooks (fog, meat locker fog and hangers, bullet shells): the rate those sites expect. */
-static void delta_time_scaled(float k) {
-    rt_resolve(0x00447830u)();  /* same stack and return address: it returns for us */
-    if (ee_fps == 60) ST(0) = (float)(ST(0) * k);
-}
-void sub_00402A50(void) { delta_time_scaled(0.5f); }
-void sub_00402A58(void) { delta_time_scaled(2.0f); }
-
-/* Cave 0x402A60 in place of `mov word [0x89FF8A], 60`: frames the flashlight takes to come on. */
-void sub_00402A60(void) {
-    MEM16(0x0089FF8Au) = ee_fps == 60 ? 0x78 : 0x3C;
-    g_esp += 4;
-}
-
-/* Cave 0x402A68 in place of `fsub dword [esi+0x11C]` (health -= an enemy's hold damage, every frame):
- * scaled by the frame time, so Flesh Lips, Abstract Daddy and the final boss hurt as much per second
- * at 60 fps (EE HoldDamage). */
-void sub_00402A68(void) {
-    float damage = MEMF(g_esi + 0x11C);
-    if (ee_fps == 60) damage = MEMF(DELTA_TIME) * 30.0f * damage;
-    ST(0) = (float)(ST(0) - damage);
-    g_esp += 4;
-}
-
-/* The "Ritual" prisoner's footstep timer (EE PrisonerTimer): the reset path (timer <= 0 at entry) sets a
- * new timer in frames, doubled at 60 fps. The other path only counts it down. */
-extern void sub_004AE580_gen(void);
-void sub_004AE580(void) {
-    int32_t timer = SMEM32(g_esi + 0xA0);
-    sub_004AE580_gen();
-    if (ee_fps == 60 && timer <= 0) MEM32(g_esi + 0xA0) <<= 1;
-}
-
-/* Spray effects (EE SprayEffect): the lying figure's and the hyper spray's particle allocators (both
- * functions start at the allocation EE hooks) spawn a particle every other frame at 60 fps, once there
- * is one, so the spray is as dense as at 30. */
-#define PARTICLE_TABLE 0x01DB96C0u
-#define FRAME_COUNTER  0x00933430u
-static int spray_alloc_active(void) {
-    static uint32_t spray_frame, spray_active;
-    uint32_t list = MEM32(PARTICLE_TABLE + 5 * 4);
-    if (list == MEM32(list + 4)) { spray_active = 1; return 1; }  /* no particle yet */
-    uint32_t frame = MEM32(FRAME_COUNTER);
-    if (frame != spray_frame) { spray_frame = frame; spray_active ^= 1; }
-    return spray_active;
-}
-extern void sub_004A4A10_gen(void);
-void sub_004A4A10(void) {
-    if (ee_fps == 60 && !spray_alloc_active()) { g_esp += 4; return; }
-    sub_004A4A10_gen();
-}
-extern void sub_004A5090_gen(void);
-void sub_004A5090(void) {
-    if (ee_fps == 60 && !spray_alloc_active()) { g_esp += 4; return; }
-    sub_004A5090_gen();
-}
-
 /* FMV subtitles (EE FmvSubtitlesSyncFix): the subtitle frame index in esi is timed for the original
- * 29.97 fps videos; with a video at another rate (the FMV pack's 60 fps) it follows that rate. esi is
+ * 29.97 fps videos; with a video at another rate (the FMV pack's 60 fps videos) it follows that rate. esi is
  * the movie loop's pass count, which falls behind the video when bink.c drops late frames (Switch), so
  * the frame actually shown (LastFrameNum, +0x10) is used instead. */
 #define BINK_HANDLE 0x00932740u   /* the game's BINK * (bink.c's BinkOpen: FrameRate +0x14, FrameRateDiv +0x18) */
@@ -505,24 +427,6 @@ void sub_0043DC50(void) {
     if (b && MEM32(b + 0x10)) g_esi = MEM32(b + 0x10);
     if (rate > 0 && div > 0) g_esi = (uint32_t)(int32_t)lrint((int32_t)g_esi * (29.97 / ((double)rate / div)));
     sub_0043DC50_gen();
-}
-
-static void ee_fps_init(void) {
-    float k = ee_fps == 60 ? 0.5f : 1.0f;  /* spray particle speeds: EE halves them at 60 */
-    ws_setf(EE_SPRAY + 0, 0.2f * k);
-    ws_setf(EE_SPRAY + 4, 0.25f * k);
-    ws_setf(EE_SPRAY + 8, 0.3f * k);
-    ws_setf(EE_SPRAY + 12, 100.0f * k);
-    ws_setf(EE_SPRAY + 16, 0.5f * k);
-    rt_log("ee: %d fps", ee_fps);
-    if (ee_fps != 60) return;
-    /* Per-frame constants in the game's data (EE PatchSixtyFPS) */
-    ws_setf(0x006BC194u, 0.0166665f);         /* water animation speed (1/30) */
-    ws_setf(0x007F3E10u, 0.0166665f);         /* low health indicator flash step (0.03, sign flips in play) */
-    ws_setf(0x0070AE40u, 0.00027777222565f);  /* staircase flames lighting (0.000555) */
-    ws_setf(0x0089C1A4u, 20.0f);              /* water level lowering steps (10) */
-    ws_setf(0x006BC1F4u, 5.333333492f);       /* water level rising steps (10.67) */
-    ws_setf(0x006C10A8u, 0.093333332985f);    /* bug room flashlight (0.1867) */
 }
 
 /* ---- Extra sounds (EE PlayWavSound.cpp): the WAVs in sh2e/sound/extra, played on the host so loading
@@ -589,16 +493,137 @@ static void ee_flashlight_sound(void) {
     last_on = on;
 }
 
+/* ---- Custom fonts (EE Patches/Fonts.cpp, PatchCustomFonts) ----
+ * The game draws text from a glyph cache texture: 0x4809F0 decodes the built-in font's glyph of a
+ * character into a free cell of a 25x17 grid of 22x32 cells (550x544). EE fills the cells from
+ * font000.png instead, 44x64 per glyph: sharper text, and the glyphs the built-in font lacks (Japanese,
+ * or a translation's own letters, e.g. Russian from a `lang` folder). The cache texture grows to 25x17 of
+ * the file's cells; the UVs are fractions of the 550x544 layout, so the drawing code is unchanged. */
+#define FONT_TYPE 0x01F5F520u  /* 0 normal, 1 small */
+#define FONT_DATA 0x008038A0u  /* per type: the built-in font (width table of 0xE0 at +0x10) */
+#define FONT_SLOT 0x01F5FEC0u
+static uint8_t *font_px;  /* gray + alpha: the fonts are white glyphs on alpha */
+static int font_w, font_h, font_cw, font_ch, font_glyphs;
+
+static int font_decode(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    uint8_t *buf = calloc(1, n + AV_INPUT_BUFFER_PADDING_SIZE);
+    fseek(f, 0, SEEK_SET);
+    n = buf ? (long)fread(buf, 1, n, f) : 0;
+    fclose(f);
+    const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_PNG);
+    AVCodecContext *ctx = codec ? avcodec_alloc_context3(codec) : NULL;
+    AVPacket *pkt = av_packet_alloc();
+    AVFrame *fr = av_frame_alloc();
+    if (n > 16 && ctx && pkt && fr && avcodec_open2(ctx, codec, NULL) == 0) {
+        pkt->data = buf;
+        pkt->size = (int)n;
+        if (avcodec_send_packet(ctx, pkt) == 0 && avcodec_receive_frame(ctx, fr) == 0 &&
+            (fr->format == AV_PIX_FMT_RGBA || fr->format == AV_PIX_FMT_YA8)) {
+            int bpp = fr->format == AV_PIX_FMT_RGBA ? 4 : 2;
+            font_w = fr->width;
+            font_h = fr->height;
+            int cols = font_w / 44, rows = font_h / 64;
+            if (!memcmp(buf + n - 16, "SH2EEFNT", 8)) {  /* EE's trailer: the grid when cells are not 44x64 */
+                memcpy(&cols, buf + n - 8, 4);
+                memcpy(&rows, buf + n - 4, 4);
+            }
+            if (cols > 0 && rows > 1 && (font_px = malloc((size_t)font_w * font_h * 2))) {
+                font_cw = font_w / cols;
+                font_ch = font_h / rows;
+                font_glyphs = cols * rows / 2;  /* the small font is the bottom half */
+                for (int y = 0; y < font_h; y++)
+                    for (int x = 0; x < font_w; x++) {
+                        const uint8_t *s = fr->data[0] + (size_t)y * fr->linesize[0] + x * bpp;
+                        font_px[((size_t)y * font_w + x) * 2] = s[bpp == 4];  /* G of RGBA, Y of YA */
+                        font_px[((size_t)y * font_w + x) * 2 + 1] = s[bpp - 1];
+                    }
+            }
+        } else
+            rt_log("ee: font: %s is not an 8-bit RGBA or gray + alpha PNG", path);
+    }
+    av_frame_free(&fr);
+    av_packet_free(&pkt);
+    avcodec_free_context(&ctx);
+    free(buf);
+    return font_px != NULL;
+}
+
+static void ee_fonts_init(void) {
+    char rel[64], host[512];
+    for (int j = 4; j >= 0 && !font_px; j--) {  /* EE: the highest numbered font file wins */
+        snprintf(rel, sizeof rel, "data/font/font%03d.png", j);
+        if (!font_decode(rt_path(rel, host, sizeof host))) continue;
+        rt_log("ee: font %s: %dx%d, %dx%d cells", host, font_w, font_h, font_cw, font_ch);
+        snprintf(rel, sizeof rel, "data/font/fontwdata%03d.bin", j);
+        FILE *f = fopen(rt_path(rel, host, sizeof host), "rb");
+        if (!f) f = fopen(rt_path("data/font/fontwdata.bin", host, sizeof host), "rb");
+        uint8_t wd[2 * 0xE0];
+        if (f && fread(wd, 1, sizeof wd, f) == sizeof wd) {  /* widths of 0x00-0xDF, normal then small */
+            for (int t = 0; t < 2; t++) {
+                uint32_t p = MEM32(FONT_DATA + 4 * t);
+                if (p && p <= UINT32_MAX - 0xF0u)
+                    memcpy((uint8_t *)GPTR(p) + 0x10, wd + 0xE0 * t, 0xE0);
+            }
+        }
+        if (f) fclose(f);
+    }
+}
+
+/* Cave 0x401280, at 0x480A0A where the glyph cache texture is sized (ecx width, eax height). */
+void sub_00401280(void) {
+    uint32_t w = font_px ? 25 * font_cw : 550, h = font_px ? 17 * font_ch : 544;
+    float one = 1.0f;
+    g_ecx = w;
+    g_eax = h;
+    MEM32(0x00943944u) = w;
+    MEM32(0x00943948u) = h;
+    memcpy(GPTR(0x0094394Cu), &one, 4);  /* UV scales */
+    memcpy(GPTR(0x00943950u), &one, 4);
+    g_esp += 4;
+}
+
+/* Cave 0x401288, at 0x480C79 once the glyph's cell (dx) is chosen and the texture locked: EE's
+ * UpdateFontTexture. eax negative: the glyph is copied from the font file, go unlock and return;
+ * else eax and EE_FONT_DATA (ebp is a local of the lifted caller) as the replaced instructions left them. */
+#define EE_FONT_DATA 0x0EC01010u
+void sub_00401288(void) {
+    uint32_t frame = g_esp + 4, type = MEM32(FONT_TYPE) & 1;
+    int slot = (int16_t)g_edx;
+    MEM16(FONT_SLOT) = (uint16_t)slot;
+    g_eax = MEM32(FONT_TYPE);
+    MEM32(EE_FONT_DATA) = MEM32(FONT_DATA + 4 * g_eax);
+    if (font_px) {
+        uint32_t pitch = MEM32(frame + 0x2C), id = MEM16(frame + 0x38);  /* D3DLOCKED_RECT, the character */
+        int cols = font_w / font_cw;
+        if ((int)id >= font_glyphs) id = 0;
+        uint8_t *out = (uint8_t *)GPTR(MEM32(frame + 0x30)) + (size_t)(slot / 25) * pitch * font_ch + slot % 25 * font_cw * 4;
+        const uint8_t *in = font_px + ((size_t)type * (font_h / 2) * font_w + (size_t)(id / cols) * font_ch * font_w +
+                                       id % cols * font_cw) * 2;
+        for (int y = 0; y < font_ch; y++, out += pitch, in += (size_t)font_w * 2)
+            for (int x = 0; x < font_cw; x++) {
+                out[4 * x] = out[4 * x + 1] = out[4 * x + 2] = in[2 * x];
+                out[4 * x + 3] = in[2 * x + 1];
+            }
+        g_eax = 0x80000000u;
+    }
+    g_esp += 4;
+}
+
 /* Called once after sh2pc.exe is loaded. */
 void ee_init(void) {
     host_arena_commit(TEX_BUF1, TEX_BUF3 + 2 * TEX_SIZE - TEX_BUF1);
     host_arena_commit(TITLE_PATHS, 0x10000);
     ee_sfx_init();
     ee_widescreen_init();
-    ee_fps_init();
     ee_extra_sounds_init();
+    ee_fonts_init();
     ee_map_scaling(1024, 1024);
-    ee_font_init();
+    /* Prefer upstream PNG/HD glyphs; use the legacy TGA overlay only as a fallback. */
+    if (!font_px) ee_font_init();
     float one = 1.0f;
     memcpy(GPTR(0x0EC01000u), &one, 4);  /* texture scale X/Y (FullscreenImages) */
     memcpy(GPTR(0x0EC01004u), &one, 4);
@@ -778,14 +803,6 @@ recomp_func_t ee_lookup_manual(uint32_t va) {
     case 0x00401268u: return sub_00401268;
     case 0x00401270u: return sub_00401270;
     case 0x00401278u: return sub_00401278;
-    case 0x004F6C80u: return sub_004F6C80;
-    case 0x00402A50u: return sub_00402A50;
-    case 0x00402A58u: return sub_00402A58;
-    case 0x00402A60u: return sub_00402A60;
-    case 0x00402A68u: return sub_00402A68;
-    case 0x004AE580u: return sub_004AE580;
-    case 0x004A4A10u: return sub_004A4A10;
-    case 0x004A5090u: return sub_004A5090;
     case 0x0043DC50u: return sub_0043DC50;
     }
     return NULL;

@@ -29,15 +29,18 @@ RECOMP_TLS volatile uint32_t g_icall_trace[ICALL_TRACE_SIZE];  /* per thread: se
 RECOMP_TLS volatile uint32_t g_icall_trace_idx;
 RECOMP_TLS volatile uint64_t g_icall_count;
 
+#ifndef SH2_LEAN
 int rt_trace;
+#endif
 char rt_game_dir[512] = ".";
 
-#ifdef __SWITCH__
+#if defined(__SWITCH__) && !defined(SH2_LEAN)
 /* Off unless launched by nxlink or asked for with log=1 in sh2e.ini: writing sh2.log costs an SD card write
  * per line (crashes still go to sh2-crash.log). */
 static int log_on;
 #endif
 
+#ifndef SH2_LEAN
 void rt_log(const char *fmt, ...) {
 #ifdef __SWITCH__
     if (!log_on) return;
@@ -59,8 +62,13 @@ void rt_log(const char *fmt, ...) {
     }
 #endif
 }
+#endif
 
 static void dump_icall_trace(FILE *f) {
+#ifdef RECOMP_NO_ICALL_TRACE
+    (void)f;
+    return;
+#endif
     fprintf(f, "last indirect calls:");
     for (int i = 0; i < ICALL_TRACE_SIZE; i++)
         fprintf(f, " %08X", g_icall_trace[(g_icall_trace_idx + i) & (ICALL_TRACE_SIZE - 1)]);
@@ -317,8 +325,10 @@ recomp_func_t recomp_lookup_kernel(uint32_t va) {
     uint32_t i = (va - HOSTFN_BASE) / HOSTFN_STRIDE;
     if (va < HOSTFN_BASE || i >= n_hostfn) return NULL;
     if (!hostfn[i].fn) rt_fatal("unimplemented import %s", hostfn[i].name);
+#ifndef SH2_LEAN
     if (rt_trace) trace_and_call(i);
     if (oracle_armed) { oracle_pending = hostfn[i].fn; return oracle_record; }
+#endif
     return hostfn[i].fn;
 }
 
@@ -464,13 +474,14 @@ static uint32_t load_exe(const char *path) {
 }
 
 extern void xbe_entry_point(void);
-void ee_init(void);  /* src/game/ee.c */
+void launcher_run(void);  /* src/d3d8/launcher.c */
 
 /* The game runs on a thread of its own: lifted code recurses as deep as the guest and the main
  * thread's stack is not ours to size on every platform. */
 static void game_thread(void *unused) {
     (void)unused;
     rt_thread_init_main(1u << 20);
+    launcher_run();
     xbe_entry_point();
     rt_log("entry point returned");
     exit(0);
@@ -480,17 +491,19 @@ int main(int argc, char **argv) {
 #ifdef __SWITCH__
     const char *dir = "sdmc:/switch/sh2-nx";
     (void)argc; (void)argv;
+#ifndef SH2_LEAN
     if (__nxlink_host.s_addr) {  /* launched by nxlink: stdout/stderr and the log go back to the PC */
         socketInitializeDefault();
         if (nxlinkStdio() >= 0) log_on = 1;
         else socketExit();
     }
+#endif
 #else
     const char *dir = argc > 1 ? argv[1] : getenv("SH2_DIR");
 #endif
     if (dir) snprintf(rt_game_dir, sizeof rt_game_dir, "%s", dir);
     if (chdir(rt_game_dir)) rt_fatal("cannot enter %s", rt_game_dir);
-#ifdef __SWITCH__
+#if defined(__SWITCH__) && !defined(SH2_LEAN)
     FILE *ini = fopen("sh2e.ini", "r");
     char line[128];
     int v;
@@ -498,15 +511,16 @@ int main(int argc, char **argv) {
         if (sscanf(line, " log = %d", &v) == 1) log_on = v;
     if (ini) fclose(ini);
 #endif
+#ifndef SH2_LEAN
     rt_trace = getenv("SH2_TRACE") != NULL;
     if (getenv("SH2_COVER")) cover_from = atoi(getenv("SH2_COVER"));
     if (getenv("SH2_ORACLE")) sscanf(getenv("SH2_ORACLE"), "%x,%u", &oracle_va, &oracle_nth);
+#endif
 
     host_crash_handlers(on_crash);
     arena_init();
     recomp_dispatch_init();
     load_exe("sh2pc.exe");
-    ee_init();
     host_thread_start(game_thread, NULL, 16u << 20);
     for (;;) sleep(1000);
 }

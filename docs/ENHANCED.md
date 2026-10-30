@@ -46,8 +46,7 @@ EE patches the running game from its d3d8.dll. Here:
 - `tools/eepattern.py` / `tools/eeaddr.py` resolve EE's search patterns to v1.0 addresses.
 
 Ported so far: ControllerTweaks (search camera, d-pad, separate analogs), RestoreVibration,
-PauseScreenFix, SetSixtyFPS (`fps=60`, with most of PatchSixtyFPS: see README), FixFMVSpeed,
-FmvSubtitlesSyncFix.
+PauseScreenFix, FixFMVSpeed, FmvSubtitlesSyncFix.
 
 ### Upstream issues
 - **Missing branch in MSVC switch chains** (xboxrecomp lifter): a jcc reached by both `cmp` and

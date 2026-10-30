@@ -10,6 +10,11 @@ Read `docs/MAINTENANCE_ZH.md` before updating, building or packaging the Chinese
   describe the workflow as automatically decompiling or patching an arbitrary NRO.
 - Keep upstream audio/render/input fixes. Review the resource path, Japanese-slot
   pause resource, font/width loader, initialization and texture upload hooks.
+- On v1.02 and later prefer upstream ee_fonts_init() and its PNG/HD glyph cache.
+  Initialize the legacy TGA overlay only when font_px is NULL; never activate both
+  paths. Retain the Chinese slot-0 pause-resource mapping.
+  After changes to the PNG path, run the additional native PNG checks documented
+  in docs/CHINESE.md; the standard helper's TGA tests exercise the fallback only.
 - Guest addresses in ee_font.c target the supported PC exe, not NRO file offsets.
   Verify the PC executable size and SHA-1 before using those addresses.
 - Use `tools/build_zh.ps1 -CheckOnly` for readiness checks, then the full helper for

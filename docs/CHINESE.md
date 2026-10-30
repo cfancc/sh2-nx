@@ -1,82 +1,65 @@
-# Chinese language adaptation (v1.00-zh1)
+# Chinese compatibility build (v1.02-zh1)
 
-Windows build helper and Chinese maintenance guide: [MAINTENANCE_ZH.md](MAINTENANCE_ZH.md).
+Based on upstream `v1.02`, commit `95ae2f16efc09c82f405f04383a27d98c2fa804a`.
+Windows build and packaging instructions: [MAINTENANCE_ZH.md](MAINTENANCE_ZH.md).
 
-This fork branch preserves the local Chinese adaptation built from upstream
-`v1.00` (`7a56503f453ef05975cb5bfac5bcdb9d6db20a3b`). It is not an upstream
-release. The later upstream `main` logging changes are not part of this baseline.
+## Font and resource paths
 
-## What changes
+Upstream now supplies `lang/` precedence and native PNG fonts. This branch keeps
+that implementation, including the larger 44 x 64 glyph cache and the new
+launcher, options, rendering, audio and thread behavior.
 
-- Existing files under `lang/` take priority over `sh2e/` and `data/` resources.
-  Missing language files retain the upstream fallback behavior.
-- When the selected language is Japanese (slot 0), the pause-menu request for
-  `r_menu_e.res` uses an available `lang/etc/resource/r_menu_j.res`. The tested
-  Simplified Chinese pack replaces that language slot.
-- A true-color TGA font sheet and its optional 448-byte `fontwdata.bin` are loaded
-  through that resource path. Both raw and RLE TGA, 24/32-bit pixels and image
-  origins are handled. Repeat packets advance the input cursor once per packet.
-- Each glyph is reduced on the CPU into the game's original texture slots before
-  texture upload, preserving the game's text coordinates and dimensions.
-- The local NRO version is `1.00-zh1` to distinguish it from the official build.
+The tested Simplified Chinese pack occupies Japanese language slot 0:
+`SET DX_CONFIG_LANGUAGE 0` in `language.ini`. Its PNG is 4400 x 9600 and its
+matching `fontwdata.bin` is 448 bytes. Keep the original PNG and width table.
+Width-table writes skip null or overflowing guest pointers.
+The Chinese pause resource is selected from `lang/etc/resource/r_menu_j.res`
+when slot 0 requests the English-named pause resource.
 
-No game executable, translation, font artwork, save, controller configuration or
-compiled binary is included. Supply your own files and follow the upstream build
-instructions in the README.
+The older CPU TGA renderer is retained as a fallback. `ee_init()` first calls
+upstream `ee_fonts_init()` and initializes the TGA renderer only if no PNG font
+was loaded. Thus the legacy texture overlay remains inactive when the upstream
+PNG/HD path succeeds. The fallback uses 44 x 64 source cells reduced into the
+original 22 x 32 cache cells, with correct raw/RLE TGA decoding.
 
-## Using your language pack
-
-Place the pack's `lang/` alongside the NRO, preserving its directory structure.
-The tested Chinese pack needs `SET DX_CONFIG_LANGUAGE 0` in `language.ini`.
-
-This adaptation reads `lang/font/font000.tga`, not PNG. If the pack supplies a PNG,
-convert that exact image (with its alpha channel and full size) using Pillow:
+To regenerate a fallback TGA from your own matching PNG:
 
 ```sh
 .venv/bin/python tools/convert_ee_font.py /path/to/lang/font/font000.png /path/to/lang/font/font000.tga
 ```
 
-Keep the matching `fontwdata.bin` from the same pack. Do not reuse a different
-language pack's TGA. The tested sheet is 4400 x 9600, with 44 x 64 cells and two
-equally sized style halves; its decoded BGRA buffer uses 168,960,000 bytes.
-Other font layouts have not been validated. This is a language-pack adaptation,
-not a general Unicode text renderer. Normal title-takeover memory requirements
-still apply.
+Do not reuse the 4400 x 896 TGA from an older Russian pack with the Chinese PNG.
+No game executable, translation, font artwork, saves or compiled binaries are
+tracked in this repository.
 
-## Validation and limits
+## Validation
 
-The original v1.00-zh1 source was fully compiled with devkitPro's devkita64 image
-`sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282`.
-NRO SHA-256:
-`211e313a1a56e1f53c142bbef1537a74347b1118237bb0f9aa7f6f104a6ee9e8`.
+The v1.02-zh1 NRO builds with the pinned devkitPro image used by
+`tools/build_zh.ps1`. Full generation reports no failed functions; unresolved
+targets are reported by the upstream generator and remain a runtime limitation.
 
-Offline checks passed: all 42,240,000 decoded pixels match the source PNG;
-six representative glyph outputs match the older ARM64 rasterizer; width-table
-loading, malformed RLE rejection, resource priority, menu mapping, case matching
-and save-path fallback were checked. These checks do not establish full game or
-hardware compatibility. The new v1.00-zh1 build still needs Switch testing.
+The existing native tests check language priority, Japanese-slot pause resources,
+case matching, save paths, TGA decoding, width tables and fallback glyphs.
+`tests/local/png_font_driver.c` includes the current font implementation extracted
+from `src/game/ee.c` by `check_png_font.py prepare`. It exercises actual upstream
+FFmpeg PNG decoding, width tables, the HD cache, normal/small glyphs, out-of-range
+glyph fallback and the original-font path. Pillow independently checks all
+42,240,000 PNG pixels and seven glyph fixtures.
 
-The native checks are retained in `tests/local/`. After `tools/regen.sh` has
-generated the runtime headers, run from the repository root on Linux:
+The additional PNG native check needs host `libavcodec-dev` and `libavutil-dev`
+in a Linux test container, independently of the Switch cross-compiler libraries:
 
 ```sh
-mkdir -p build
-python3 tests/local/prepare_path_fixtures.py
-cc -O2 -ffunction-sections -fdata-sections -Isrc/recomp/gen tests/local/path_driver.c src/win32/kernel32.c -Wl,--gc-sections -pthread -lm -o build/path-test
-./build/path-test
-# Requires your own tested 4400 x 9600 sheet and matching width table in game/lang/font/.
-cc -O2 -Wall -Wextra -Werror -Isrc/recomp/gen tests/local/font_driver.c -o build/font-test
-./build/font-test
+.venv/bin/python tests/local/check_png_font.py prepare
+cc -O2 -Wall -Wextra -Werror -Ibuild -Isrc/recomp/gen tests/local/png_font_driver.c -lavcodec -lavutil -o build/png-font-test
+./build/png-font-test
+.venv/bin/python tests/local/check_png_font.py check
 ```
 
-The font check writes decoded pixels and six glyph fixtures under `build/` for
-local comparison; it does not include or download font assets. The source
-converter requires Pillow, already listed in `requirements.txt`.
+Private test inputs belong in `game/lang/font/`: the Chinese PNG, matching TGA
+and width table. Generated code, test outputs, dependencies and game inputs are
+ignored by Git. The PNG checker removes its large pixel fixtures after success.
 
-## Following upstream
-
-Keep the fork's `main` for upstream synchronization and this branch for the
-v1.00 adaptation. For a new release, create a branch at its tag, carry over the
-small adaptation commits, resolve conflicts and rebuild/test before deployment.
-The Japanese-slot menu special case and font layout assumptions need review
-before proposing a generic language-pack feature upstream.
+Compilation and offline checks do not establish Switch compatibility. The
+v1.02-zh1 build still needs hardware testing, especially text, the new launcher,
+controls, saves and dialogue audio.

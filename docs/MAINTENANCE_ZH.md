@@ -21,6 +21,7 @@
 | `tests/local/font_driver.c` | 验证 C 字库解码、字宽、异常 RLE 和字形输出 |
 | `tests/local/check_font_output.py` | 对照 Pillow 校验全部解码像素，并独立计算六个字形的期望像素；通过后清理大体积临时像素文件 |
 | `tests/local/test_package_zh.py` | 使用合成文件测试 NRO 解析、精简包内容、可选语言设置及拒绝覆盖等保护 |
+| `tests/local/png_font_driver.c`、`check_png_font.py` | 直接验证当前上游 PNG 字体函数的解码、字宽、高清缓存和回退；运行步骤见 CHINESE.md |
 | `AGENTS.md` | 让后续接手的编码助手自动读到本项目的维护约定 |
 
 ## 先检查环境
@@ -44,16 +45,19 @@ docker pull devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a
 
 - `game/sh2pc.exe`：5,685,248 字节，SHA-1 为 `3201a5e1029f3ae3b77770255dcbe10360b3cd09`。
 - `game/lang/font/font000.tga` 和同包的 `fontwdata.bin`：供 native 字体验证使用。
+- `game/lang/font/font000.png`：上游 PNG 字体路径的额外 native 验证输入。
 
 原始完整游戏副本在总目录的 `01_游戏文件`。这些游戏文件和字体不提交到 Git。
 
 ## 跟进新版本源码
 
-当前适配基于上游 `v1.00`，基线提交为 `7a56503f453ef05975cb5bfac5bcdb9d6db20a3b`；原适配分支为 `chinese-v1.00`。
+当前适配基于上游 `v1.02`，基线提交为 `95ae2f16efc09c82f405f04383a27d98c2fa804a`，分支为 `chinese-v1.02`。此前的 `chinese-v1.00` 保留在 Git 历史中。
+
+v1.02 已有上游 PNG 高清字库和 lang 优先路径。当前先运行上游 PNG 字体初始化，只有 PNG 未能加载时才初始化旧 TGA 后备；两套绘制逻辑不能同时生效。日语槽暂停菜单映射仍需保留。
 
 1. 确认当前工作已提交，运行 `git fetch upstream --tags`，查明新 NRO 对应的实际标签或提交。
-2. 从那个标签/提交创建新的中文维护分支。保留原分支作为 Git 内的基线，不需要另存历史源码目录。
-3. 审查并迁移旧分支相对其上游基线的提交。不要复制整个旧 src 覆盖上游新源码。可以先用 `git log --reverse --oneline 7a56503..chinese-v1.00` 查看旧改动，再按实际新版本执行 cherry-pick、解决冲突。
+2. 从当前中文分支创建新分支，再合并新版本对应的上游标签/提交；先不提交合并，审查冲突和适配行为。保留原分支作为 Git 内的基线，不需要另存历史源码目录。
+3. 用 `git diff v1.02..chinese-v1.02 -- src tools CMakeLists.txt` 查看当前的最终适配差异。不要复制整个旧 src 覆盖上游新源码；如果上游已经实现某项功能，保留上游行为并审查旧补丁是否仍需要。迁移合并历史时不能机械地 cherry-pick 所有旧提交。
 4. 更新 CMakeLists.txt 的本地版本号，例如新版本后追加 `-zh1`，以便与官方 NRO 区分。打包器要求这个标记；标记只用于识别，不能证明运行时汉化正确。
 5. 核对下表中的适配点，完成构建和测试，再打包。
 
@@ -61,9 +65,10 @@ docker pull devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a
 | --- | --- |
 | `src/win32/kernel32.c` 的 rt_path | lang 优先于启用的 sh2e，最后回退 data；缺文件时回退正常 |
 | 同文件的暂停菜单映射 | 语言槽 0 时优先 lang/etc/resource/r_menu_j.res |
-| `src/game/ee_font.c/.h` | 完整 TGA/RLE 解码、字宽、44×64 单元、两套样式、22×32 字形输出 |
-| `src/game/ee.c` 的 ee_init | 调用 ee_font_init |
-| `src/d3d8/d3d8_res.c` 的 unlock_surface | 在字体纹理上传前调用 ee_font_overlay；重新检查 Res 字段和像素格式 |
+| `src/game/ee_font.c/.h` | TGA 后备的完整解码、字宽、44×64 单元、两套样式、22×32 字形输出 |
+| `src/game/ee.c` 的 ee_init | 先调用上游 ee_fonts_init；仅在 font_px 为空时调用 ee_font_init |
+| `src/game/ee.c` 的 Custom fonts 部分 | 上游 PNG 解码、44×64 高清缓存和字宽，保留当前上游 hook |
+| `src/d3d8/d3d8_res.c` 的 unlock_surface | 后备字库未初始化时 ee_font_overlay 不生效；重新检查 Res 字段和像素格式 |
 | `CMakeLists.txt` | 新增 game 源文件实际参与构建；本地中文版本标签正确 |
 
 当前代码使用的 PC 来宾地址：语言 `0x01DBC006`、字宽表指针 `0x008038A0`、字体纹理 `0x00943928`、当前字形槽 `0x01F5FEC0`、字形编号表 `0x01F5F560`。
@@ -71,7 +76,7 @@ docker pull devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a
 
 ## 字库转换与构建
 
-当前原始中文包提供 4400×9600 PNG 和 448 字节字宽表。俄版残留 TGA 为 4400×896，不能和中文编号混用。已有正确中文 TGA 时无需再转换。
+当前原始中文包提供 4400×9600 PNG 和 448 字节字宽表，v1.02 上游字体路径直接使用 PNG。TGA 用于兼容后备和后备测试；俄版残留 TGA 为 4400×896，不能和中文编号混用。已有正确中文 TGA 时无需再转换。
 
 转换脚本需要 Pillow；可使用已安装 Pillow 的 Python：
 

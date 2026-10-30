@@ -3,7 +3,7 @@
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 podman run --rm -v "$ROOT:/src:Z" -w /src docker.io/devkitpro/devkita64:latest sh -c '
-  cmake -S . -B build/switch -G Ninja -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake \
+  cmake -S . -B build/switch -G Ninja -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake "$@" \
         -DCMAKE_BUILD_TYPE=Release >/dev/null &&
-  cmake --build build/switch -j "$(nproc)"'
+  cmake --build build/switch -j "$(nproc)"' sh "$@"  # extra CMake options, e.g. -DSH2_LEAN=OFF
 ls -la "$ROOT/build/switch/sh2-nx.nro"
