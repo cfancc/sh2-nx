@@ -43,7 +43,7 @@ class PackagingTests(unittest.TestCase):
 
     def args(self, include_ini=False, name='release'):
         return SimpleNamespace(nro=self.nro, lang=self.lang, output=self.root / name,
-                               include_language_ini=include_ini, dry_run=False)
+                               include_language_ini=include_ini, no_zip=False, dry_run=False)
 
     def run_package(self, args):
         with contextlib.redirect_stdout(io.StringIO()):
@@ -68,6 +68,17 @@ class PackagingTests(unittest.TestCase):
         self.run_package(self.args(include_ini=True))
         self.assertEqual((self.root / 'release/switch/sh2-nx/language.ini').read_bytes(),
                          b'SET DX_CONFIG_LANGUAGE 0\r\n')
+
+    def test_png_only_uncompressed_package(self):
+        (self.lang / 'font/font000.tga').unlink()
+        png = b'\x89PNG\r\n\x1a\n' + struct.pack('>I', 13) + b'IHDR' + struct.pack('>II', 44, 128)
+        (self.lang / 'font/font000.png').write_bytes(png)
+        args = self.args()
+        args.no_zip = True
+        self.run_package(args)
+        self.assertFalse((self.root / 'release.zip').exists())
+        self.assertEqual((args.output / 'switch/sh2-nx/lang/font/font000.png').read_bytes(), png)
+        self.assertFalse((args.output / 'switch/sh2-nx/lang/font/font000.tga').exists())
 
     def test_unmarked_nro_does_not_create_output(self):
         self.write_nro('1.00')

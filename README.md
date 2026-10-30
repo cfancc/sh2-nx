@@ -1,4 +1,4 @@
-> Fork branch: [Chinese adaptation build, setup and validation](docs/CHINESE.md) (`v1.02-zh1`, hardware testing pending).
+> Fork branch: [Chinese adaptation build, setup and validation](docs/CHINESE.md) (`v1.02-zh2`, hardware testing pending).
 
 > 中文维护：[更新、构建与精简打包说明](docs/MAINTENANCE_ZH.md)。
 

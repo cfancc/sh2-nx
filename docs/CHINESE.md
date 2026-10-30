@@ -1,4 +1,4 @@
-# Chinese compatibility build (v1.02-zh1)
+# Chinese compatibility build (v1.02-zh2)
 
 Based on upstream `v1.02`, commit `95ae2f16efc09c82f405f04383a27d98c2fa804a`.
 Windows build and packaging instructions: [MAINTENANCE_ZH.md](MAINTENANCE_ZH.md).
@@ -13,8 +13,21 @@ The tested Simplified Chinese pack occupies Japanese language slot 0:
 `SET DX_CONFIG_LANGUAGE 0` in `language.ini`. Its PNG is 4400 x 9600 and its
 matching `fontwdata.bin` is 448 bytes. Keep the original PNG and width table.
 Width-table writes skip null or overflowing guest pointers.
-The Chinese pause resource is selected from `lang/etc/resource/r_menu_j.res`
-when slot 0 requests the English-named pause resource.
+Keep all original `_j.mes` filenames and `lang/etc/resource/r_menu_j.res`.
+No `_e` copies are needed. The NRO now reads the EE executable-string resource
+and redirects pause, exit-confirmation, disc/controller messages and quick-save
+notifications at the game's text-parser boundary. The original parser handles
+the byte encoding, centering controls and glyph IDs. Missing/invalid resources
+retain the original strings; slot 0 gets a valid English source pause table.
+
+The previous `rt_path` e-to-j alias in zh1 did not implement this feature: the
+unpatched executable never requested these resource files. It has been removed.
+The resource format is documented by EE's
+[Patches/Langs.cpp](https://github.com/elishacloud/Silent-Hill-2-Enhancements/blob/master/Patches/Langs.cpp).
+The new implementation lives in `src/game/ee_lang.c` and two small wrappers in
+`ee.c`; generated code must be regenerated with both wrappers excluded as manual.
+Resource line 21 (PC keyboard button format) and lines 25+ (EE's own UI, absent
+from this port) are not redirected. This does not translate the port's launcher.
 
 The older CPU TGA renderer is retained as a fallback. `ee_init()` first calls
 upstream `ee_fonts_init()` and initializes the TGA renderer only if no PNG font
@@ -34,12 +47,18 @@ tracked in this repository.
 
 ## Validation
 
-The v1.02-zh1 NRO builds with the pinned devkitPro image used by
+The v1.02-zh2 NRO builds with the pinned devkitPro image used by
 `tools/build_zh.ps1`. Full generation reports no failed functions; unresolved
 targets are reported by the upstream generator and remain a runtime limitation.
 
 The existing native tests check language priority, Japanese-slot pause resources,
 case matching, save paths, TGA decoding, width tables and fallback glyphs.
+The build helper also extracts the actual generated pause/text-parser functions
+and their character-conversion helpers for `tests/local/lang_driver.c`. It checks
+the original Chinese resource bytes, 24 in-game strings, all five source pause
+tables, the first pause from slot 0, caller-stack preservation, language changes,
+CRLF/LF input, missing/truncated resources, embedded NULs and oversized input.
+Rendering is stubbed in this test; it cannot establish the on-screen layout.
 `tests/local/png_font_driver.c` includes the current font implementation extracted
 from `src/game/ee.c` by `check_png_font.py prepare`. It exercises actual upstream
 FFmpeg PNG decoding, width tables, the HD cache, normal/small glyphs, out-of-range
@@ -57,9 +76,10 @@ cc -O2 -Wall -Wextra -Werror -Ibuild -Isrc/recomp/gen tests/local/png_font_drive
 ```
 
 Private test inputs belong in `game/lang/font/`: the Chinese PNG, matching TGA
-and width table. Generated code, test outputs, dependencies and game inputs are
+and width table, plus `game/lang/etc/resource/r_menu_j.res` from the original
+Chinese ZIP. Generated code, test outputs, dependencies and game inputs are
 ignored by Git. The PNG checker removes its large pixel fixtures after success.
 
 Compilation and offline checks do not establish Switch compatibility. The
-v1.02-zh1 build still needs hardware testing, especially text, the new launcher,
+v1.02-zh2 build still needs hardware testing, especially text, the new launcher,
 controls, saves and dialogue audio.

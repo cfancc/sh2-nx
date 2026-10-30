@@ -12,6 +12,7 @@
 #include <ctype.h>
 #include "../runtime/host.h"
 #include "ee_font.h"
+#include "ee_lang.h"
 #include "ee_sfx.h"
 #include <libavcodec/avcodec.h>
 
@@ -613,6 +614,23 @@ void sub_00401288(void) {
     g_esp += 4;
 }
 
+/* ---- External menu strings (EE Patches/Langs.cpp resource format) ---- */
+extern void sub_00407300_gen(void);
+void sub_00407300(void) {
+    ee_lang_pause();
+    sub_00407300_gen();
+}
+
+extern void sub_004829F0_gen(void);
+void sub_004829F0(void) {
+    /* cdecl: the original parser pops only its return address. Restore the
+     * caller-owned argument afterward, without touching its register results. */
+    uint32_t argument = g_esp + 4, original = MEM32(argument);
+    MEM32(argument) = ee_lang_string(original);
+    sub_004829F0_gen();
+    MEM32(argument) = original;
+}
+
 /* Called once after sh2pc.exe is loaded. */
 void ee_init(void) {
     host_arena_commit(TEX_BUF1, TEX_BUF3 + 2 * TEX_SIZE - TEX_BUF1);
@@ -621,6 +639,7 @@ void ee_init(void) {
     ee_widescreen_init();
     ee_extra_sounds_init();
     ee_fonts_init();
+    ee_lang_init();
     ee_map_scaling(1024, 1024);
     /* Prefer upstream PNG/HD glyphs; use the legacy TGA overlay only as a fallback. */
     if (!font_px) ee_font_init();
@@ -760,6 +779,8 @@ void sub_004567B0(void) { uint32_t from = MEM32(g_esp); sub_004567B0_gen(); save
 /* recomp_lookup_manual: every call the recompiler routed through the manual table lands here. */
 recomp_func_t ee_lookup_manual(uint32_t va) {
     switch (va) {
+    case 0x00407300u: return sub_00407300;
+    case 0x004829F0u: return sub_004829F0;
     case 0x00458060u: return sub_00458060;
     case 0x00534660u: return sub_00534660;
     case 0x00458760u: return sub_00458760;

@@ -18,6 +18,7 @@
 | `tools/build_zh.ps1` | Windows 下检查输入、启动固定版本 Docker 编译环境、生成源码、验证并构建 NRO |
 | `tools/package_zh.py` | 读取 NRO 版本/哈希；检查字库；制作并校验精简包，拒绝覆盖现有输出 |
 | `tests/local/path_driver.c` | 验证 lang 优先级、暂停菜单资源、大小写及存档路径 |
+| `tests/local/prepare_lang_test.py`、`lang_driver.c` | 提取实际生成的文字解析与暂停函数，验证菜单加载、中文编码、调用栈及缺失资源回退 |
 | `tests/local/font_driver.c` | 验证 C 字库解码、字宽、异常 RLE 和字形输出 |
 | `tests/local/check_font_output.py` | 对照 Pillow 校验全部解码像素，并独立计算六个字形的期望像素；通过后清理大体积临时像素文件 |
 | `tests/local/test_package_zh.py` | 使用合成文件测试 NRO 解析、精简包内容、可选语言设置及拒绝覆盖等保护 |
@@ -46,6 +47,7 @@ docker pull devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a
 - `game/sh2pc.exe`：5,685,248 字节，SHA-1 为 `3201a5e1029f3ae3b77770255dcbe10360b3cd09`。
 - `game/lang/font/font000.tga` 和同包的 `fontwdata.bin`：供 native 字体验证使用。
 - `game/lang/font/font000.png`：上游 PNG 字体路径的额外 native 验证输入。
+- `game/lang/etc/resource/r_menu_j.res`：原中文包的菜单资源，供新菜单实现的 native 验证使用。
 
 原始完整游戏副本在总目录的 `01_游戏文件`。这些游戏文件和字体不提交到 Git。
 
@@ -53,7 +55,7 @@ docker pull devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a
 
 当前适配基于上游 `v1.02`，基线提交为 `95ae2f16efc09c82f405f04383a27d98c2fa804a`，分支为 `chinese-v1.02`。此前的 `chinese-v1.00` 保留在 Git 历史中。
 
-v1.02 已有上游 PNG 高清字库和 lang 优先路径。当前先运行上游 PNG 字体初始化，只有 PNG 未能加载时才初始化旧 TGA 后备；两套绘制逻辑不能同时生效。日语槽暂停菜单映射仍需保留。
+v1.02 已有上游 PNG 高清字库和 lang 优先路径。当前先运行上游 PNG 字体初始化，只有 PNG 未能加载时才初始化旧 TGA 后备；两套绘制逻辑不能同时生效。1.02-zh2 新增实际的 EE 菜单资源加载和文字替换；之前仅做路径映射并不会触发资源读取，现已移除该映射。中文包的 `_j.mes` 与 `r_menu_j.res` 均保持原名，语言槽为 0。
 
 1. 确认当前工作已提交，运行 `git fetch upstream --tags`，查明新 NRO 对应的实际标签或提交。
 2. 从当前中文分支创建新分支，再合并新版本对应的上游标签/提交；先不提交合并，审查冲突和适配行为。保留原分支作为 Git 内的基线，不需要另存历史源码目录。
@@ -64,7 +66,7 @@ v1.02 已有上游 PNG 高清字库和 lang 优先路径。当前先运行上游
 | 文件/位置 | 要保留或重新核对的行为 |
 | --- | --- |
 | `src/win32/kernel32.c` 的 rt_path | lang 优先于启用的 sh2e，最后回退 data；缺文件时回退正常 |
-| 同文件的暂停菜单映射 | 语言槽 0 时优先 lang/etc/resource/r_menu_j.res |
+| `src/game/ee_lang.c/.h`、`ee.c` 的 sub_00407300 / sub_004829F0 | 加载对应槽位 r_menu_*.res，在原文字解析器入口替换内置文本；槽 0 暂停菜单设置有效源表；缺资源回退 |
 | `src/game/ee_font.c/.h` | TGA 后备的完整解码、字宽、44×64 单元、两套样式、22×32 字形输出 |
 | `src/game/ee.c` 的 ee_init | 先调用上游 ee_fonts_init；仅在 font_px 为空时调用 ee_font_init |
 | `src/game/ee.c` 的 Custom fonts 部分 | 上游 PNG 解码、44×64 高清缓存和字宽，保留当前上游 hook |
@@ -85,7 +87,7 @@ python -m pip install Pillow
 python .\tools\convert_ee_font.py '中文包\lang\font\font000.png' '中文包\lang\font\font000.tga'
 ```
 
-把匹配的 TGA/字宽表放入 `game/lang/font/` 后构建：
+把匹配的 TGA/字宽表放入 `game/lang/font/`，原菜单资源放入上述测试路径后构建：
 
 ```powershell
 .\tools\build_zh.ps1
@@ -111,6 +113,7 @@ python .\tools\package_zh.py pack --nro .\build\switch\sh2-nx.nro --lang '..\..\
 ```
 
 默认包内只有 `switch/sh2-nx/sh2-nx.nro` 和 `lang/`，保留必需的 `fontwdata.bin`，不复制 keyconf.dat、settings.ini、sh2e.ini。需要附带语言槽设置时显式加 `--include-language-ini`，只会生成语言值 0 的 language.ini。
+v1.02-zh2 可直接用原中文包的 PNG 资源打包，无需附带 TGA。保留原包 `r_menu_j.res`，新 NRO 的菜单加载器会实际读取它。加 `--no-zip` 可只生成目录，不创建压缩包。正文 `_j.mes` 不改名，不复制成 `_e.mes`。原包中属于 PC EE 自身设置界面的文字不会让 Switch 移植版启动器变成中文。
 输出路径已存在时会报错，不覆盖当前交付包。打包会检查 NRO 结构、TGA/PNG 尺寸及字宽，逐文件核对复制结果、ZIP CRC 和 SHA-256。尺寸/标记检查不能代替完整字体解码或实机测试。
 
 修改打包工具后可运行：`python -B -m unittest discover -s tests/local -p test_package_zh.py`。测试使用临时合成文件并自动清理。

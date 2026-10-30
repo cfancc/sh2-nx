@@ -12,7 +12,9 @@ Read `docs/MAINTENANCE_ZH.md` before updating, building or packaging the Chinese
   pause resource, font/width loader, initialization and texture upload hooks.
 - On v1.02 and later prefer upstream ee_fonts_init() and its PNG/HD glyph cache.
   Initialize the legacy TGA overlay only when font_px is NULL; never activate both
-  paths. Retain the Chinese slot-0 pause-resource mapping.
+  paths. Keep ee_lang.c's executable-string loader and the parser/pause wrappers
+  in ee.c. The old rt_path e-to-j alias alone did not load any menu strings and
+  was removed in 1.02-zh2; do not restore it or rename the pack's _j.mes files.
   After changes to the PNG path, run the additional native PNG checks documented
   in docs/CHINESE.md; the standard helper's TGA tests exercise the fallback only.
 - Guest addresses in ee_font.c target the supported PC exe, not NRO file offsets.
@@ -23,7 +25,9 @@ Read `docs/MAINTENANCE_ZH.md` before updating, building or packaging the Chinese
 - Use `tools/convert_ee_font.py` only when a correct matching Chinese TGA is absent
   or needs regenerating from PNG. Preserve alpha and the matching fontwdata.bin.
 - Use `tools/package_zh.py` for a new minimal package. Default to only NRO + lang;
-  language.ini is opt-in. Do not overwrite a current package while preparing one.
+  language.ini is opt-in. For v1.02, the original PNG pack needs no generated TGA;
+  --no-zip produces an unpacked folder. Keep its original r_menu_j.res for the
+  custom loader. Do not overwrite a current package while preparing one.
 - Game exe, fonts, translations, saves and other game assets are private inputs.
   Never stage or publish game/, generated src/recomp/gen/, build/, .venv/ or dist/.
 - Native tests do not prove Switch behavior. Report hardware validation separately.

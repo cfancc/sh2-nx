@@ -46,24 +46,31 @@ def inspect_nro(path):
 def check_font(lang):
     tga = lang / 'font/font000.tga'
     widths = lang / 'font/fontwdata.bin'
-    with tga.open('rb') as stream:
-        header = stream.read(18)
-    if len(header) != 18 or header[1] or header[2] not in (2, 10) or header[16] not in (24, 32):
-        raise ValueError('Font must be an unindexed 24/32-bit raw or RLE TGA')
-    width, height = struct.unpack_from('<HH', header, 12)
-    if not width or not height or width % 44 or height % 128:
-        raise ValueError('Font does not match the 44 x 64 cell, two-style layout')
     if widths.stat().st_size != 448:
         raise ValueError('fontwdata.bin must contain 448 bytes from the matching language pack')
     png = lang / 'font/font000.png'
+    dimensions = []
     if png.exists():
         with png.open('rb') as stream:
             png_header = stream.read(24)
         if len(png_header) != 24 or png_header[:8] != b'\x89PNG\r\n\x1a\n' or png_header[12:16] != b'IHDR':
             raise ValueError('Invalid source font PNG')
-        if struct.unpack_from('>II', png_header, 16) != (width, height):
-            raise ValueError('TGA and PNG dimensions differ; convert the Chinese PNG instead of using a stale TGA')
+        dimensions.append(struct.unpack_from('>II', png_header, 16))
+    if tga.exists():
+        with tga.open('rb') as stream:
+            header = stream.read(18)
+        if len(header) != 18 or header[1] or header[2] not in (2, 10) or header[16] not in (24, 32):
+            raise ValueError('Font must be an unindexed 24/32-bit raw or RLE TGA')
+        dimensions.append(struct.unpack_from('<HH', header, 12))
+    if not dimensions:
+        raise ValueError('Language pack needs font000.png or a matching fallback font000.tga')
+    width, height = dimensions[0]
+    if any(d != (width, height) for d in dimensions):
+        raise ValueError('TGA and PNG dimensions differ; convert the Chinese PNG instead of using a stale TGA')
+    if not width or not height or width % 44 or height % 128:
+        raise ValueError('Font does not match the 44 x 64 cell, two-style layout')
     return {'width': width, 'height': height, 'width_table_bytes': 448,
+            'png_included': png.exists(), 'tga_included': tga.exists(),
             'tested_font_layout': (width, height) == (4400, 9600)}
 
 
@@ -71,8 +78,8 @@ def package(args):
     nro = args.nro.resolve(strict=True)
     lang = args.lang.resolve(strict=True)
     output = args.output.resolve()
-    archive = output.parent / (output.name + '.zip')
-    if output.exists() or archive.exists():
+    archive = None if args.no_zip else output.parent / (output.name + '.zip')
+    if output.exists() or (archive is not None and archive.exists()):
         raise FileExistsError('Output already exists; choose a new path to avoid overwriting a release')
     if output == lang or lang in output.parents:
         raise ValueError('Output must be outside the input lang directory')
@@ -95,7 +102,7 @@ def package(args):
         raise ValueError('Language pack contains no files')
     report = {'nro': nro_info, 'font': font_info, 'language_assets': len(files),
               'language_slot_required': 0, 'language_ini_included': args.include_language_ini,
-              'output': str(output), 'archive': str(archive), 'dry_run': args.dry_run}
+              'output': str(output), 'archive': str(archive) if archive else None, 'dry_run': args.dry_run}
     if args.dry_run:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return
@@ -116,17 +123,18 @@ def package(args):
         target = output / relative
         target.write_bytes(b'SET DX_CONFIG_LANGUAGE 0\r\n')
         expected[relative] = sha256(target)
-    with zipfile.ZipFile(archive, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zipped:
-        for relative in sorted(expected):
-            zipped.write(output / relative, relative)
-    with zipfile.ZipFile(archive) as zipped:
-        if set(zipped.namelist()) != set(expected) or zipped.testzip() is not None:
-            raise RuntimeError('ZIP entry or CRC verification failed')
-        for relative, digest in expected.items():
-            if hashlib.sha256(zipped.read(relative)).hexdigest() != digest:
-                raise RuntimeError(f'ZIP hash verification failed: {relative}')
-    report.update({'files': len(expected), 'archive_bytes': archive.stat().st_size,
-                   'archive_sha256': sha256(archive), 'hardware_validation': 'not established by packaging'})
+    if archive is not None:
+        with zipfile.ZipFile(archive, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zipped:
+            for relative in sorted(expected):
+                zipped.write(output / relative, relative)
+        with zipfile.ZipFile(archive) as zipped:
+            if set(zipped.namelist()) != set(expected) or zipped.testzip() is not None:
+                raise RuntimeError('ZIP entry or CRC verification failed')
+            for relative, digest in expected.items():
+                if hashlib.sha256(zipped.read(relative)).hexdigest() != digest:
+                    raise RuntimeError(f'ZIP hash verification failed: {relative}')
+        report.update({'archive_bytes': archive.stat().st_size, 'archive_sha256': sha256(archive)})
+    report.update({'files': len(expected), 'hardware_validation': 'not established by packaging'})
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
@@ -140,6 +148,7 @@ def main():
     pack.add_argument('--lang', type=Path, required=True)
     pack.add_argument('--output', type=Path, required=True)
     pack.add_argument('--include-language-ini', action='store_true')
+    pack.add_argument('--no-zip', action='store_true', help='Create an unpacked folder only')
     pack.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
     try:

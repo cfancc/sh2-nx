@@ -13,7 +13,7 @@ def main():
     if args.action == 'prepare':
         text = Path('src/game/ee.c').read_text(encoding='utf-8')
         start = text.index('/* ---- Custom fonts (')
-        end = text.index('/* Called once after sh2pc.exe is loaded. */', start)
+        end = text.index('/* ---- External menu strings (', start)
         (build / 'upstream-font-under-test.inc').write_text(text[start:end], encoding='utf-8')
         return
     from PIL import Image

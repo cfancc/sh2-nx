@@ -19,6 +19,7 @@ if ((Get-Item -LiteralPath $taskExe).Length -ne 5685248 -or
 $taskMarkers = @{
     'src\win32\kernel32.c' = 'lang/%s'
     'src\game\ee.c' = 'ee_font_init();'
+    'src\game\ee_lang.c' = 'uint32_t ee_lang_string('
     'src\game\ee_font.c' = 'void ee_font_overlay('
     'src\d3d8\d3d8_res.c' = 'ee_font_overlay('
 }
@@ -30,6 +31,9 @@ foreach ($taskFont in @('font000.tga', 'fontwdata.bin')) {
     if (-not (Test-Path -LiteralPath (Join-Path $taskRepo ('game\lang\font\' + $taskFont)))) {
         throw "Missing private test input game/lang/font/$taskFont"
     }
+}
+if (-not (Test-Path -LiteralPath (Join-Path $taskRepo 'game\lang\etc\resource\r_menu_j.res'))) {
+    throw 'Missing private menu test input game/lang/etc/resource/r_menu_j.res.'
 }
 docker info --format '{{.ServerVersion}}'
 if ($LASTEXITCODE -ne 0) { throw 'Start Docker Desktop first.' }
@@ -68,6 +72,9 @@ cc -O2 -ffunction-sections -fdata-sections -Isrc/recomp/gen tests/local/path_dri
 cc -O2 -Wall -Wextra -Werror -Isrc/recomp/gen tests/local/font_driver.c -o build/font-test
 ./build/font-test
 .venv/bin/python3 tests/local/check_font_output.py
+python3 tests/local/prepare_lang_test.py
+cc -O2 -ffunction-sections -fdata-sections -Ibuild -Isrc/recomp/gen tests/local/lang_driver.c src/game/ee_lang.c src/win32/kernel32.c -Wl,--gc-sections -pthread -lm -o build/lang-test
+for case in valid lf missing short embedded_nul long oversize; do ./build/lang-test "$case"; done
 cmake -S . -B build/switch -G Ninja -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake -DCMAKE_BUILD_TYPE=Release
 cmake --build build/switch -j "$SH2_BUILD_JOBS"
 '@

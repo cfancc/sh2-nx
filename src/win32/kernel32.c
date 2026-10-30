@@ -67,9 +67,6 @@ const char *rt_path(const char *guest, char *out, size_t n) {
         char alt[512], res[512];
         struct stat st;
         const char *rel = r + 5;
-        /* The tested Chinese pack occupies the Japanese language slot. */
-        if (!strcasecmp(rel, "etc/resource/r_menu_e.res") && MEM8(0x01DBC006u) == 0)
-            rel = "etc/resource/r_menu_j.res";
         snprintf(alt, sizeof alt, "lang/%s", rel);
         rt_path_base(alt, res, sizeof res);
         if (stat(res, &st) == 0 && S_ISREG(st.st_mode)) {

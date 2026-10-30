@@ -21,7 +21,8 @@ int main(void) {
     check("DATA\\Etc\\Message\\option_msg_j.mes","lang/etc/message/option_msg_j.mes");
     check("data/etc/message/common_msg_j.mes","sh2e/etc/message/common_msg_j.mes");
     check("data/etc/message/item_msg_j.mes","data/etc/message/item_msg_j.mes");
-    check("data/etc/resource/r_menu_e.res","lang/etc/resource/r_menu_j.res");
+    check("data/etc/resource/r_menu_j.res","lang/etc/resource/r_menu_j.res");
+    check("data/etc/resource/r_menu_e.res","lang/etc/resource/r_menu_e.res");
     check("data/pic/etc/start01j.tex","lang/pic/etc/start01j.tex");
     MEM8(0x01DBC006)=1;
     check("data/etc/resource/r_menu_e.res","lang/etc/resource/r_menu_e.res");
